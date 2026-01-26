@@ -1,0 +1,1065 @@
+"""
+Screen capture and detection for Governor of Poker 3.
+Optimized for 3440x1440 resolution based on calibration images.
+"""
+
+import cv2
+import numpy as np
+import mss
+import pyautogui
+import time
+import random
+import os
+import re
+from pathlib import Path
+
+# Try to import pytesseract
+try:
+    import pytesseract
+    # Set Tesseract path for Windows
+    pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+    TESSERACT_AVAILABLE = True
+except ImportError:
+    TESSERACT_AVAILABLE = False
+    print("Warning: pytesseract not available. Using position-based detection only.")
+
+
+class ScreenCapture:
+    """Handles screen capture functionality."""
+
+    def __init__(self):
+        self.sct = mss.mss()
+
+    def capture_screen(self, region=None):
+        """Capture screen or specific region. Returns BGR numpy array."""
+        if region:
+            monitor = {
+                "left": region[0],
+                "top": region[1],
+                "width": region[2],
+                "height": region[3]
+            }
+        else:
+            monitor = self.sct.monitors[1]  # Primary monitor
+
+        screenshot = self.sct.grab(monitor)
+        img = np.array(screenshot)
+        return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+
+    def save_screenshot(self, filename="screenshot.png", region=None):
+        """Save a screenshot for debugging."""
+        img = self.capture_screen(region)
+        cv2.imwrite(filename, img)
+        return img
+
+
+class GOP3Detector:
+    """Detects game elements for Governor of Poker 3."""
+
+    def __init__(self, config):
+        self.config = config
+        self.capture = ScreenCapture()
+        self.tesseract_available = TESSERACT_AVAILABLE
+        self.digit_templates = {}
+        self.template_ready = False
+        if self.tesseract_available:
+            try:
+                pytesseract.get_tesseract_version()
+            except Exception:
+                self.tesseract_available = False
+                print("Warning: Tesseract not available. Card totals cannot be read.")
+        if getattr(self.config, 'TOTAL_READ_MODE', 'ocr') == 'template':
+            self._load_digit_templates()
+
+    def capture_game(self):
+        """Capture the game screen."""
+        if self.config.GAME_WINDOW:
+            return self.capture.capture_screen(self.config.GAME_WINDOW)
+        return self.capture.capture_screen()
+
+    def _preprocess_for_ocr(self, image, scale: float) -> np.ndarray:
+        """Preprocess an ROI for OCR using common Tesseract quality steps."""
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+        # Boost scale for small glyphs
+        min_dim = min(gray.shape[0], gray.shape[1])
+        if min_dim < 20:
+            scale = max(scale, 8.0)
+        elif min_dim < 30:
+            scale = max(scale, 6.0)
+        elif min_dim < 50:
+            scale = max(scale, 4.0)
+
+        # Improve contrast
+        clip = getattr(self.config, 'OCR_CLAHE_CLIP', 2.0)
+        grid = getattr(self.config, 'OCR_CLAHE_GRID', (4, 4))
+        clahe = cv2.createCLAHE(clipLimit=clip, tileGridSize=grid)
+        gray = clahe.apply(gray)
+
+        if scale and scale != 1.0:
+            gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+
+        blur = getattr(self.config, 'OCR_MEDIAN_BLUR', 3)
+        if blur and blur > 1:
+            gray = cv2.medianBlur(gray, blur)
+
+        # Binarize
+        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+        # Ensure black text on white background
+        white_ratio = float(cv2.countNonZero(thresh)) / float(thresh.size)
+        if white_ratio < 0.5:
+            thresh = cv2.bitwise_not(thresh)
+
+        # Clean up noise
+        ksize = getattr(self.config, 'OCR_MORPH_KERNEL', 2)
+        if ksize and ksize > 1:
+            kernel = np.ones((ksize, ksize), np.uint8)
+            thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+            thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+
+        # Crop to text bounds if possible
+        text_mask = (thresh < 128).astype(np.uint8) * 255
+        ys, xs = np.where(text_mask > 0)
+        if len(xs) > 0 and len(ys) > 0:
+            pad = 3
+            x_min = max(xs.min() - pad, 0)
+            x_max = min(xs.max() + pad, thresh.shape[1] - 1)
+            y_min = max(ys.min() - pad, 0)
+            y_max = min(ys.max() + pad, thresh.shape[0] - 1)
+            thresh = thresh[y_min:y_max + 1, x_min:x_max + 1]
+
+        # Add a small white border to help OCR
+        thresh = cv2.copyMakeBorder(thresh, 2, 2, 2, 2, cv2.BORDER_CONSTANT, value=255)
+
+        return thresh
+
+    def _detect_blue_circle_total(self, roi) -> tuple:
+        """
+        Detect a hand total from a blue circle indicator within a ROI.
+        Returns (total, is_soft) or (None, False) if not detected.
+        """
+        if not self.tesseract_available:
+            return (None, False)
+        if roi is None or roi.size == 0:
+            return (None, False)
+
+        # Convert to HSV to find the blue circle
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+
+        # Blue color range (indicator circle)
+        lower_blue = np.array(getattr(self.config, 'BLUE_CIRCLE_HSV_LOWER', (70, 30, 40)))
+        upper_blue = np.array(getattr(self.config, 'BLUE_CIRCLE_HSV_UPPER', (140, 255, 255)))
+        blue_mask = cv2.inRange(hsv, lower_blue, upper_blue)
+
+        # Find contours of blue regions
+        contours, _ = cv2.findContours(blue_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        min_area = getattr(self.config, 'BLUE_CIRCLE_MIN_AREA', 150)
+        min_size = getattr(self.config, 'BLUE_CIRCLE_MIN_SIZE', 30)
+        aspect_min, aspect_max = getattr(self.config, 'BLUE_CIRCLE_ASPECT_RANGE', (0.7, 1.4))
+        ocr_scale = getattr(self.config, 'OCR_SCALE', 2.0)
+
+        roi_h, roi_w = roi.shape[:2]
+        min_dim = min(roi_h, roi_w)
+        if min_dim < 120:
+            min_size = max(10, int(min_dim * 0.20))
+            min_area = max(40, int(min_size * min_size * 0.5))
+
+        candidates = []
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area < min_area:  # Too small
+                continue
+
+            x, y, cw, ch = cv2.boundingRect(contour)
+            if cw < min_size or ch < min_size:
+                continue
+            aspect = cw / float(ch) if ch else 0
+            if not (aspect_min <= aspect <= aspect_max):
+                continue
+
+            perimeter = cv2.arcLength(contour, True)
+            circularity = 0.0
+            if perimeter > 0:
+                circularity = 4 * np.pi * area / (perimeter * perimeter)
+
+            candidates.append((circularity, area, x, y, cw, ch))
+
+        candidates.sort(key=lambda c: (c[0], c[1]), reverse=True)
+
+        for circularity, area, x, y, cw, ch in candidates:
+            # Extract the blue circle region
+            circle_roi = roi[y:y+ch, x:x+cw]
+            if circle_roi.size == 0:
+                continue
+
+            try:
+                fast_mode = getattr(self.config, 'OCR_FAST_MODE', False)
+                roi_candidates = [circle_roi]
+
+                text = ""
+                psms = getattr(self.config, 'OCR_PSMS', (8, 10))
+                for candidate in roi_candidates:
+                    processed = self._preprocess_for_ocr(candidate, ocr_scale)
+                    for psm in psms:
+                        text = pytesseract.image_to_string(
+                            processed,
+                            config=f'--psm {psm} --oem 3 -c tessedit_char_whitelist=0123456789/'
+                        ).strip()
+                        if text:
+                            break
+                    if not text and not fast_mode:
+                        # Fallback: simpler thresholding for small single-digit totals
+                        gray = cv2.cvtColor(candidate, cv2.COLOR_BGR2GRAY)
+                        if ocr_scale and ocr_scale != 1.0:
+                            gray = cv2.resize(
+                                gray, None, fx=ocr_scale, fy=ocr_scale, interpolation=cv2.INTER_CUBIC
+                            )
+                        for thresh in [
+                            cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1],
+                            cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1],
+                        ]:
+                            for psm in psms:
+                                text = pytesseract.image_to_string(
+                                    thresh,
+                                    config=f'--psm {psm} --oem 3 -c tessedit_char_whitelist=0123456789/'
+                                ).strip()
+                                if text:
+                                    break
+                            if text:
+                                break
+                    if text or fast_mode:
+                        break
+
+                # Check for soft hand format: "low/high" (e.g., "10/20")
+                soft_match = re.match(r'(\d+)/(\d+)', text)
+                if soft_match:
+                    high_total = int(soft_match.group(2))
+                    if 12 <= high_total <= 21:
+                        return (high_total, True)
+
+                # Hard hand: just a single number
+                numbers = re.findall(r'\d+', text)
+                if numbers:
+                    total = int(numbers[0])
+                    if 4 <= total <= 21:
+                        return (total, False)
+            except Exception:
+                pass
+
+        return (None, False)
+
+    def _ocr_text_from_circle(self, circle_roi) -> str:
+        """OCR the circle region for raw total text."""
+        if not self.tesseract_available:
+            return ""
+
+        ocr_scale = getattr(self.config, 'OCR_SCALE', 2.0)
+        psms = getattr(self.config, 'OCR_PSMS', (8, 10))
+        text = ""
+        try:
+            processed = self._preprocess_for_ocr(circle_roi, ocr_scale)
+            for psm in psms:
+                text = pytesseract.image_to_string(
+                    processed,
+                    config=f'--psm {psm} --oem 3 -c tessedit_char_whitelist=0123456789/'
+                ).strip()
+                if text:
+                    break
+        except Exception:
+            return ""
+
+        return text
+
+    def _find_blue_circle_roi(self, roi):
+        """Find the most likely blue circle ROI inside a larger ROI."""
+        if roi is None or roi.size == 0:
+            return None
+
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        lower_blue = np.array(getattr(self.config, 'BLUE_CIRCLE_HSV_LOWER', (70, 30, 40)))
+        upper_blue = np.array(getattr(self.config, 'BLUE_CIRCLE_HSV_UPPER', (140, 255, 255)))
+        blue_mask = cv2.inRange(hsv, lower_blue, upper_blue)
+        contours, _ = cv2.findContours(blue_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        min_area = getattr(self.config, 'BLUE_CIRCLE_MIN_AREA', 150)
+        min_size = getattr(self.config, 'BLUE_CIRCLE_MIN_SIZE', 30)
+        aspect_min, aspect_max = getattr(self.config, 'BLUE_CIRCLE_ASPECT_RANGE', (0.7, 1.4))
+
+        roi_h, roi_w = roi.shape[:2]
+        min_dim = min(roi_h, roi_w)
+        if min_dim < 120:
+            min_size = max(10, int(min_dim * 0.20))
+            min_area = max(40, int(min_size * min_size * 0.5))
+
+        best = None
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area < min_area:
+                continue
+            x, y, cw, ch = cv2.boundingRect(contour)
+            if cw < min_size or ch < min_size:
+                continue
+            aspect = cw / float(ch) if ch else 0
+            if not (aspect_min <= aspect <= aspect_max):
+                continue
+            perimeter = cv2.arcLength(contour, True)
+            circularity = 0.0
+            if perimeter > 0:
+                circularity = 4 * np.pi * area / (perimeter * perimeter)
+            score = circularity * area
+            if best is None or score > best[0]:
+                best = (score, x, y, cw, ch)
+
+        if best is None:
+            return None
+
+        _, x, y, cw, ch = best
+        circle_roi = roi[y:y + ch, x:x + cw]
+        if circle_roi.size == 0:
+            return None
+        return circle_roi
+
+    def _prepare_label_binary(self, circle_roi):
+        """Prepare a binary image for template matching."""
+        if circle_roi is None or circle_roi.size == 0:
+            return None
+
+        h, w = circle_roi.shape[:2]
+        y1_ratio, y2_ratio = getattr(self.config, 'TEMPLATE_LABEL_SLICE', (0.55, 1.0))
+        y1 = int(h * y1_ratio)
+        y2 = int(h * y2_ratio)
+        label = circle_roi[y1:y2, :]
+        if label.size == 0:
+            return None
+
+        target_h = getattr(self.config, 'TEMPLATE_SIZE', (24, 36))[1] * 2
+        scale = max(1.0, target_h / float(label.shape[0]))
+        label = cv2.resize(label, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+
+        gray = cv2.cvtColor(label, cv2.COLOR_BGR2GRAY)
+        gray = cv2.GaussianBlur(gray, (3, 3), 0)
+        _, th_inv = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        _, th = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+        kernel = np.ones((2, 2), np.uint8)
+        th_inv = cv2.morphologyEx(th_inv, cv2.MORPH_OPEN, kernel)
+        th_inv = cv2.morphologyEx(th_inv, cv2.MORPH_CLOSE, kernel)
+        th = cv2.morphologyEx(th, cv2.MORPH_OPEN, kernel)
+        th = cv2.morphologyEx(th, cv2.MORPH_CLOSE, kernel)
+
+        def count_components(binary):
+            comps = self._extract_components(binary)
+            return len(comps)
+
+        inv_count = count_components(th_inv)
+        count = count_components(th)
+
+        if 0 < inv_count <= getattr(self.config, 'TEMPLATE_MAX_COMPONENTS', 6):
+            return th_inv
+        if 0 < count <= getattr(self.config, 'TEMPLATE_MAX_COMPONENTS', 6):
+            return cv2.bitwise_not(th)
+
+        # Fall back to the variant with more components (likely digits)
+        if inv_count >= count:
+            return th_inv
+        return cv2.bitwise_not(th)
+
+    def _extract_components(self, binary):
+        """Extract bounding boxes for character candidates."""
+        if binary is None or binary.size == 0:
+            return []
+
+        height, width = binary.shape[:2]
+        area_total = float(binary.size)
+        min_ratio = getattr(self.config, 'TEMPLATE_MIN_AREA_RATIO', 0.002)
+        max_ratio = getattr(self.config, 'TEMPLATE_MAX_AREA_RATIO', 0.35)
+        min_height_ratio = getattr(self.config, 'TEMPLATE_MIN_HEIGHT_RATIO', 0.30)
+        max_width_ratio = getattr(self.config, 'TEMPLATE_MAX_WIDTH_RATIO', 0.70)
+
+        num, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+        boxes = []
+        for idx in range(1, num):
+            x, y, w, h, area = stats[idx]
+            if w <= 0 or h <= 0:
+                continue
+            area_ratio = area / area_total
+            if area_ratio < min_ratio or area_ratio > max_ratio:
+                continue
+            if (h / float(height)) < min_height_ratio:
+                continue
+            if (w / float(width)) > max_width_ratio:
+                continue
+            boxes.append((x, y, w, h, area))
+
+        max_components = getattr(self.config, 'TEMPLATE_MAX_COMPONENTS', 6)
+        if len(boxes) > max_components:
+            boxes.sort(key=lambda b: b[4], reverse=True)
+            boxes = boxes[:max_components]
+
+        boxes.sort(key=lambda b: b[0])
+        return boxes
+
+    def _normalize_char(self, binary, box):
+        """Normalize a character image to template size."""
+        x, y, w, h, _ = box
+        char = binary[y:y + h, x:x + w]
+        if char.size == 0:
+            return None
+
+        target_w, target_h = getattr(self.config, 'TEMPLATE_SIZE', (24, 36))
+        scale = min(target_w / float(w), target_h / float(h))
+        resized = cv2.resize(char, None, fx=scale, fy=scale, interpolation=cv2.INTER_NEAREST)
+
+        canvas = np.zeros((target_h, target_w), dtype=np.uint8)
+        rh, rw = resized.shape[:2]
+        offset_x = max(0, (target_w - rw) // 2)
+        offset_y = max(0, (target_h - rh) // 2)
+        canvas[offset_y:offset_y + rh, offset_x:offset_x + rw] = resized
+
+        return canvas
+
+    def _match_char(self, char_img):
+        """Match a normalized character image to templates."""
+        if not self.digit_templates:
+            return None, 0.0
+
+        best_char = None
+        best_score = 0.0
+        for char, templates in self.digit_templates.items():
+            for templ in templates:
+                if templ.shape != char_img.shape:
+                    continue
+                score = 1.0 - float(np.mean(np.abs(char_img.astype(np.int16) - templ.astype(np.int16))) / 255.0)
+                if score > best_score:
+                    best_score = score
+                    best_char = char
+
+        return best_char, best_score
+
+    def _parse_total_text(self, text: str) -> tuple:
+        """Parse raw total text into (total, is_soft)."""
+        clean = re.sub(r'[^0-9/]', '', text or '')
+        if not clean:
+            return (None, False)
+        if '/' in clean:
+            parts = clean.split('/')
+            if len(parts) >= 2 and parts[1].isdigit():
+                total = int(parts[1])
+                if 4 <= total <= 21:
+                    return (total, True)
+            return (None, False)
+        if clean.isdigit():
+            total = int(clean)
+            if 4 <= total <= 21:
+                return (total, False)
+        return (None, False)
+
+    def _detect_blue_circle_total_template(self, roi) -> tuple:
+        """Detect totals using template matching."""
+        if not self.digit_templates:
+            return (None, False)
+
+        circle_roi = self._find_blue_circle_roi(roi)
+        if circle_roi is None:
+            return (None, False)
+
+        binary = self._prepare_label_binary(circle_roi)
+        boxes = self._extract_components(binary)
+        if not boxes:
+            return (None, False)
+
+        chars = []
+        for box in boxes:
+            char_img = self._normalize_char(binary, box)
+            if char_img is None:
+                continue
+            char, score = self._match_char(char_img)
+            if char is None:
+                return (None, False)
+            if score < getattr(self.config, 'TEMPLATE_MATCH_THRESHOLD', 0.60):
+                return (None, False)
+            chars.append(char)
+
+        text = ''.join(chars)
+        return self._parse_total_text(text)
+
+    def _learn_templates_from_circle(self, circle_roi, text):
+        """Add templates from a labeled circle ROI."""
+        if circle_roi is None or circle_roi.size == 0:
+            return
+
+        text = re.sub(r'[^0-9/]', '', text or '')
+        if not text:
+            return
+
+        binary = self._prepare_label_binary(circle_roi)
+        boxes = self._extract_components(binary)
+        if not boxes or len(boxes) != len(text):
+            return
+
+        charset = set(getattr(self.config, 'TEMPLATE_CHARSET', '0123456789/'))
+        for char, box in zip(text, boxes):
+            if char not in charset:
+                continue
+            char_img = self._normalize_char(binary, box)
+            if char_img is None:
+                continue
+            self.digit_templates.setdefault(char, []).append(char_img)
+
+    def _load_digit_templates(self):
+        """Load digit templates from calibration images."""
+        self.digit_templates = {}
+        base_path = getattr(self.config, 'TEMPLATE_TOTALS_PATH', 'Calibration Images')
+        folder = Path(base_path)
+        if not folder.exists():
+            self.template_ready = False
+            return
+
+        charset = set(getattr(self.config, 'TEMPLATE_CHARSET', '0123456789/'))
+        image_paths = sorted(folder.glob('*.png'))
+
+        for image_path in image_paths:
+            image = cv2.imread(str(image_path))
+            if image is None:
+                continue
+
+            # Try player and dealer regions in this calibration image
+            for region in ['PLAYER_TOTAL_REGION', 'DEALER_TOTAL_REGION']:
+                region_cfg = getattr(self.config, region, None)
+                if not region_cfg:
+                    continue
+                h, w = image.shape[:2]
+                x1 = int(w * region_cfg['x_percent'][0])
+                x2 = int(w * region_cfg['x_percent'][1])
+                y1 = int(h * region_cfg['y_percent'][0])
+                y2 = int(h * region_cfg['y_percent'][1])
+                roi = image[y1:y2, x1:x2]
+                circle_roi = self._find_blue_circle_roi(roi)
+                if circle_roi is None:
+                    continue
+
+                text = self._ocr_text_from_circle(circle_roi)
+                self._learn_templates_from_circle(circle_roi, text)
+
+        self.template_ready = bool(self.digit_templates)
+
+    def detect_player_total(self, screen) -> tuple:
+        """
+        Detect the player's hand total from the blue circle indicator.
+
+        GOP3 displays totals in a light blue circle with white text:
+        - Hard hands: just the total (e.g., "12")
+        - Soft hands: "low/high" format (e.g., "10/20" for soft 20)
+
+        Returns:
+            (total, is_soft) or (None, False) if not detected
+        """
+        h, w = screen.shape[:2]
+
+        # Get player total region from config
+        x1 = int(w * self.config.PLAYER_TOTAL_REGION['x_percent'][0])
+        x2 = int(w * self.config.PLAYER_TOTAL_REGION['x_percent'][1])
+        y1 = int(h * self.config.PLAYER_TOTAL_REGION['y_percent'][0])
+        y2 = int(h * self.config.PLAYER_TOTAL_REGION['y_percent'][1])
+
+        roi = screen[y1:y2, x1:x2]
+        if getattr(self.config, 'TOTAL_READ_MODE', 'ocr') == 'template':
+            total, is_soft = self._detect_blue_circle_total_template(roi)
+            if total is not None:
+                return (total, is_soft)
+            if not getattr(self.config, 'TEMPLATE_FALLBACK_TO_OCR', True):
+                return (None, False)
+            circle_roi = self._find_blue_circle_roi(roi)
+            if circle_roi is not None:
+                text = self._ocr_text_from_circle(circle_roi)
+                self._learn_templates_from_circle(circle_roi, text)
+                total, is_soft = self._parse_total_text(text)
+                if total is not None:
+                    return (total, is_soft)
+        return self._detect_blue_circle_total(roi)
+
+    def detect_dealer_total(self, screen) -> int:
+        """
+        Detect the dealer's visible hand total from the blue circle indicator.
+
+        Returns:
+            Total as int or None
+        """
+        if not self.tesseract_available:
+            return None
+
+        h, w = screen.shape[:2]
+
+        region = getattr(self.config, 'DEALER_TOTAL_REGION', self.config.DEALER_CARD_REGION)
+        x1 = int(w * region['x_percent'][0])
+        x2 = int(w * region['x_percent'][1])
+        y1 = int(h * region['y_percent'][0])
+        y2 = int(h * region['y_percent'][1])
+
+        roi = screen[y1:y2, x1:x2]
+        if getattr(self.config, 'TOTAL_READ_MODE', 'ocr') == 'template':
+            total, _ = self._detect_blue_circle_total_template(roi)
+            if total is not None:
+                return total
+            if not getattr(self.config, 'TEMPLATE_FALLBACK_TO_OCR', True):
+                return None
+            circle_roi = self._find_blue_circle_roi(roi)
+            if circle_roi is not None:
+                text = self._ocr_text_from_circle(circle_roi)
+                self._learn_templates_from_circle(circle_roi, text)
+                total, _ = self._parse_total_text(text)
+                if total is not None:
+                    return total
+        total, _ = self._detect_blue_circle_total(roi)
+        return total
+
+    def detect_player_card_total(self, screen) -> tuple:
+        """
+        Attempt to read player card ranks from the card area as a sanity check.
+
+        Returns:
+            (total, is_soft, ranks) or (None, False, [])
+        """
+        if not self.tesseract_available:
+            return (None, False, [])
+
+        h, w = screen.shape[:2]
+        region = getattr(self.config, 'PLAYER_CARD_REGION', None)
+        if not region:
+            return (None, False, [])
+
+        x1 = int(w * region['x_percent'][0])
+        x2 = int(w * region['x_percent'][1])
+        y1 = int(h * region['y_percent'][0])
+        y2 = int(h * region['y_percent'][1])
+
+        roi = screen[y1:y2, x1:x2]
+        if roi.size == 0:
+            return (None, False, [])
+
+        processed = self._preprocess_for_ocr(roi, getattr(self.config, 'OCR_SCALE', 3.0))
+        psm = getattr(self.config, 'CARD_OCR_PSM', 11)
+        min_conf = getattr(self.config, 'CARD_OCR_MIN_CONF', 50)
+
+        data = pytesseract.image_to_data(
+            processed,
+            config=f'--psm {psm} --oem 3 -c tessedit_char_whitelist=A23456789JQK10',
+            output_type=pytesseract.Output.DICT,
+        )
+
+        tokens = []
+        height = processed.shape[0]
+        for text, conf, left, top, width, height_box in zip(
+            data['text'], data['conf'], data['left'], data['top'], data['width'], data['height']
+        ):
+            if not text.strip():
+                continue
+            try:
+                if float(conf) < min_conf:
+                    continue
+            except ValueError:
+                continue
+
+            # Favor the upper portion of cards (rank area)
+            if top > height * 0.7:
+                continue
+
+            clean = text.strip().upper()
+            clean = clean.replace('O', '0').replace('I', '1').replace('L', '1')
+            tokens.append((clean, left))
+
+        tokens.sort(key=lambda t: t[1])
+
+        ranks = []
+        i = 0
+        while i < len(tokens):
+            text = tokens[i][0]
+            if text == '1' and i + 1 < len(tokens) and tokens[i + 1][0] == '0':
+                ranks.append('10')
+                i += 2
+                continue
+            if text in ['A', 'J', 'Q', 'K', '10']:
+                ranks.append(text)
+            elif text.isdigit() and 2 <= int(text) <= 9:
+                ranks.append(text)
+            i += 1
+
+        if len(ranks) < 2:
+            return (None, False, [])
+
+        values = []
+        for rank in ranks:
+            if rank in ['J', 'Q', 'K']:
+                values.append(10)
+            elif rank == 'A':
+                values.append(11)
+            else:
+                values.append(int(rank))
+
+        total = sum(values)
+        aces = sum(1 for r in ranks if r == 'A')
+        while total > 21 and aces > 0:
+            total -= 10
+            aces -= 1
+
+        is_soft = 'A' in ranks and total <= 21
+        if 4 <= total <= 21:
+            return (total, is_soft, ranks)
+
+        return (None, False, [])
+
+    def detect_dealer_card(self, screen) -> str:
+        """
+        Detect the dealer's up card rank.
+
+        Returns:
+            Card rank as string ('A', '2'-'10', 'J', 'Q', 'K') or None
+        """
+        if not self.tesseract_available:
+            # Without OCR, we can't read the dealer card
+            return None
+
+        h, w = screen.shape[:2]
+
+        # Get dealer card region from config
+        x1 = int(w * self.config.DEALER_CARD_REGION['x_percent'][0])
+        x2 = int(w * self.config.DEALER_CARD_REGION['x_percent'][1])
+        y1 = int(h * self.config.DEALER_CARD_REGION['y_percent'][0])
+        y2 = int(h * self.config.DEALER_CARD_REGION['y_percent'][1])
+
+        roi = screen[y1:y2, x1:x2]
+
+        # Look for white card with black text
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+
+        # Find white regions (cards)
+        _, white_mask = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
+
+        # Find contours of white regions
+        contours, _ = cv2.findContours(white_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        for contour in contours:
+            x, y, cw, ch = cv2.boundingRect(contour)
+            # Filter by card-like aspect ratio
+            if cw > 30 and ch > 40 and 0.5 < cw/ch < 1.0:
+                # Extract just the top-left corner where rank appears
+                card_roi = roi[y:y+int(ch*0.4), x:x+int(cw*0.5)]
+                if card_roi.size == 0:
+                    continue
+
+                try:
+                    card_gray = cv2.cvtColor(card_roi, cv2.COLOR_BGR2GRAY)
+                    _, card_thresh = cv2.threshold(card_gray, 127, 255, cv2.THRESH_BINARY_INV)
+
+                    text = pytesseract.image_to_string(
+                        card_thresh,
+                        config='--psm 10 -c tessedit_char_whitelist=A23456789JQK10'
+                    ).strip().upper()
+
+                    # Clean and validate
+                    text = text.replace('O', '0').replace('I', '1').replace('L', '1')
+
+                    if text in ['A', 'J', 'Q', 'K']:
+                        return text
+                    elif text.isdigit() and 2 <= int(text) <= 10:
+                        return text
+                except Exception:
+                    pass
+
+        return None
+
+    def detect_buttons(self, screen) -> dict:
+        """
+        Get button positions.
+
+        Uses fixed positions from config since buttons are always in the same place.
+
+        Returns:
+            Dict of button_name -> (x, y) center position
+        """
+        # Use fixed button positions from config
+        if hasattr(self.config, 'USE_FIXED_BUTTONS') and self.config.USE_FIXED_BUTTONS:
+            positions = dict(self.config.BUTTON_POSITIONS)
+            if not getattr(self.config, 'ENABLE_BUTTON_COLOR_VALIDATION', False):
+                return positions
+
+            # Try dynamic detection in the button region to correct offsets
+            region = getattr(self.config, 'BUTTON_DETECT_REGION', None)
+            if region:
+                h, w = screen.shape[:2]
+                rx1 = int(w * region['x_percent'][0])
+                rx2 = int(w * region['x_percent'][1])
+                ry1 = int(h * region['y_percent'][0])
+                ry2 = int(h * region['y_percent'][1])
+
+                roi = screen[ry1:ry2, rx1:rx2]
+                if roi.size != 0:
+                    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+                    lower1 = np.array(getattr(self.config, 'BUTTON_COLOR_HSV_LOWER', (0, 120, 80)))
+                    upper1 = np.array(getattr(self.config, 'BUTTON_COLOR_HSV_UPPER', (15, 255, 255)))
+                    lower2 = np.array(getattr(self.config, 'BUTTON_COLOR_HSV_LOWER2', (170, 120, 80)))
+                    upper2 = np.array(getattr(self.config, 'BUTTON_COLOR_HSV_UPPER2', (180, 255, 255)))
+
+                    mask1 = cv2.inRange(hsv, lower1, upper1)
+                    mask2 = cv2.inRange(hsv, lower2, upper2)
+                    mask = cv2.bitwise_or(mask1, mask2)
+
+                    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    min_area = getattr(self.config, 'BUTTON_MIN_AREA', 2500)
+                    min_w = getattr(self.config, 'BUTTON_MIN_WIDTH', 80)
+                    min_h = getattr(self.config, 'BUTTON_MIN_HEIGHT', 30)
+
+                    buttons = []
+                    for cnt in contours:
+                        x, y, bw, bh = cv2.boundingRect(cnt)
+                        area = bw * bh
+                        if area < min_area or bw < min_w or bh < min_h:
+                            continue
+                        cx = rx1 + x + bw // 2
+                        cy = ry1 + y + bh // 2
+                        buttons.append((cx, cy))
+
+                    buttons.sort(key=lambda b: b[0])
+                    if len(buttons) >= 2:
+                        mapping = {}
+                    if len(buttons) == 2:
+                        mapping = {'hit': buttons[0], 'stand': buttons[1]}
+                    elif len(buttons) == 3:
+                        mapping = {'hit': buttons[0], 'stand': buttons[1], 'double': buttons[2]}
+                    else:
+                        mapping = {
+                            'hit': buttons[0],
+                            'stand': buttons[1],
+                            'double': buttons[2],
+                            'split': buttons[3],
+                        }
+                    try:
+                        import gop3_config as config
+                        if getattr(config, 'DISABLE_SPLIT', False):
+                            mapping.pop('split', None)
+                    except Exception:
+                        pass
+                    return mapping
+
+            h, w = screen.shape[:2]
+            radius = getattr(self.config, 'BUTTON_VALIDATE_RADIUS', 18)
+            threshold = getattr(self.config, 'BUTTON_VALIDATE_THRESHOLD', 0.25)
+            lower1 = np.array(getattr(self.config, 'BUTTON_COLOR_HSV_LOWER', (0, 120, 80)))
+            upper1 = np.array(getattr(self.config, 'BUTTON_COLOR_HSV_UPPER', (15, 255, 255)))
+            lower2 = np.array(getattr(self.config, 'BUTTON_COLOR_HSV_LOWER2', (170, 120, 80)))
+            upper2 = np.array(getattr(self.config, 'BUTTON_COLOR_HSV_UPPER2', (180, 255, 255)))
+
+            visible = {}
+            for name, (x, y) in positions.items():
+                try:
+                    import gop3_config as config
+                    if getattr(config, 'DISABLE_SPLIT', False) and name == 'split':
+                        continue
+                except Exception:
+                    pass
+                x1 = max(0, x - radius)
+                x2 = min(w, x + radius)
+                y1 = max(0, y - radius)
+                y2 = min(h, y + radius)
+                if x2 <= x1 or y2 <= y1:
+                    continue
+
+                roi = screen[y1:y2, x1:x2]
+                hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+                mask1 = cv2.inRange(hsv, lower1, upper1)
+                mask2 = cv2.inRange(hsv, lower2, upper2)
+                mask = cv2.bitwise_or(mask1, mask2)
+                ratio = float(cv2.countNonZero(mask)) / float(mask.size)
+                if ratio >= threshold:
+                    visible[name] = (x, y)
+
+            return visible
+
+        # Fallback to empty dict if no fixed positions
+        return {}
+
+    def detect_auto_bet_checkbox(self, screen) -> tuple:
+        """
+        Detect the auto-bet checkbox state and position.
+
+        Returns:
+            (checked: bool or None, position: (x, y) or None)
+        """
+        region = getattr(self.config, 'AUTO_BET_SEARCH_REGION', None)
+        if not region:
+            return (None, None)
+
+        h, w = screen.shape[:2]
+        rx1 = int(w * region['x_percent'][0])
+        rx2 = int(w * region['x_percent'][1])
+        ry1 = int(h * region['y_percent'][0])
+        ry2 = int(h * region['y_percent'][1])
+
+        roi = screen[ry1:ry2, rx1:rx2]
+        if roi.size == 0:
+            return (None, None)
+
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        blur = cv2.GaussianBlur(gray, (3, 3), 0)
+        edges = cv2.Canny(blur, 50, 150)
+        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        min_dim = min(roi.shape[0], roi.shape[1])
+        min_size = max(getattr(self.config, 'AUTO_BET_BOX_MIN_SIZE', 14), int(min_dim * 0.08))
+        max_size = min(getattr(self.config, 'AUTO_BET_BOX_MAX_SIZE', 80), int(min_dim * 0.60))
+        aspect_min, aspect_max = getattr(self.config, 'AUTO_BET_BOX_ASPECT_RANGE', (0.75, 1.25))
+        x_min_ratio, x_max_ratio = getattr(self.config, 'AUTO_BET_BOX_X_RANGE', (0.30, 0.80))
+
+        best = None
+        for cnt in contours:
+            x, y, bw, bh = cv2.boundingRect(cnt)
+            if bw < min_size or bh < min_size or bw > max_size or bh > max_size:
+                continue
+            aspect = bw / float(bh) if bh else 0
+            if not (aspect_min <= aspect <= aspect_max):
+                continue
+
+            cx_ratio = (x + bw * 0.5) / float(roi.shape[1])
+            if not (x_min_ratio <= cx_ratio <= x_max_ratio):
+                continue
+
+            area = bw * bh
+            score = area * (1.0 - abs(aspect - 1.0))
+            if best is None or score > best[0]:
+                best = (score, x, y, bw, bh)
+
+        if best is None:
+            return (None, None)
+
+        _, x, y, bw, bh = best
+        abs_x = rx1 + x
+        abs_y = ry1 + y
+        cx = abs_x + bw // 2
+        cy = abs_y + bh // 2
+
+        pad_ratio = getattr(self.config, 'AUTO_BET_INNER_PAD_RATIO', 0.20)
+        pad = int(min(bw, bh) * pad_ratio)
+        inner = roi[y + pad:y + bh - pad, x + pad:x + bw - pad]
+        if inner.size == 0:
+            return (None, (cx, cy))
+
+        inner_gray = cv2.cvtColor(inner, cv2.COLOR_BGR2GRAY)
+        bright_thresh = getattr(self.config, 'AUTO_BET_BRIGHT_THRESHOLD', 200)
+        bright_ratio = float((inner_gray > bright_thresh).mean())
+        check_ratio = getattr(self.config, 'AUTO_BET_CHECK_RATIO', 0.08)
+        checked = bright_ratio >= check_ratio
+
+        return (checked, (cx, cy))
+
+    def detect_game_state(self, screen) -> dict:
+        """
+        Detect complete game state from screen.
+
+        Game flow:
+        1. Betting phase - no player total visible
+        2. Player turn - player total visible, make hit/stand/double/split decisions
+        3. Waiting - dealer turn or between hands
+
+        Returns:
+            Dict with: phase, player_total, is_soft, dealer_total, dealer_card,
+            buttons, can_split, can_double
+        """
+        state = {
+            'phase': 'unknown',
+            'player_total': None,
+            'is_soft': False,
+            'dealer_total': None,
+            'dealer_card': None,
+            'buttons': {},
+            'can_split': False,
+            'can_double': False,
+        }
+
+        # Detect totals independently
+        total, is_soft = self.detect_player_total(screen)
+        dealer_total = self.detect_dealer_total(screen)
+
+        state['player_total'] = total
+        state['is_soft'] = is_soft
+        state['dealer_total'] = dealer_total
+
+        # If we can read a player total, we're in player turn
+        if total is not None:
+            state['phase'] = 'player_turn'
+            state['buttons'] = self.detect_buttons(screen)
+            state['can_split'] = 'split' in state['buttons']
+            state['can_double'] = 'double' in state['buttons']
+
+            if getattr(self.config, 'READ_DEALER_CARD', False):
+                state['dealer_card'] = self.detect_dealer_card(screen)
+        else:
+            state['phase'] = 'betting'
+
+        return state
+
+
+class GameController:
+    """Controls mouse interaction with the game."""
+
+    def __init__(self, click_delay=0.2):
+        self.click_delay = click_delay
+        pyautogui.PAUSE = 0.1
+        pyautogui.FAILSAFE = True  # Move to corner to abort
+
+    def click(self, x, y):
+        """Click at screen coordinates."""
+        min_move = getattr(self, 'mouse_move_min', None)
+        max_move = getattr(self, 'mouse_move_max', None)
+        midpoint_jitter = getattr(self, 'mouse_midpoint_jitter', None)
+
+        if min_move is None or max_move is None or midpoint_jitter is None:
+            try:
+                import gop3_config as config
+                min_move = getattr(config, 'MOUSE_MOVE_MIN', 0.18)
+                max_move = getattr(config, 'MOUSE_MOVE_MAX', 0.45)
+                midpoint_jitter = getattr(config, 'MOUSE_MIDPOINT_JITTER', 35)
+            except Exception:
+                min_move, max_move, midpoint_jitter = 0.18, 0.45, 35
+
+        start_x, start_y = pyautogui.position()
+        mid_x = int((start_x + x) / 2 + random.randint(-midpoint_jitter, midpoint_jitter))
+        mid_y = int((start_y + y) / 2 + random.randint(-midpoint_jitter, midpoint_jitter))
+
+        pyautogui.moveTo(mid_x, mid_y, duration=random.uniform(min_move, max_move))
+        pyautogui.moveTo(x, y, duration=random.uniform(min_move, max_move))
+        pyautogui.click(x, y)
+        time.sleep(self.click_delay)
+
+    def click_button(self, position):
+        """Click a button at the given position."""
+        if position:
+            self.click(position[0], position[1])
+            return True
+        return False
+
+
+if __name__ == '__main__':
+    import gop3_config as config
+
+    print("Testing GOP3 detection...")
+    print("Make sure Governor of Poker 3 is visible on screen.")
+    input("Press Enter to capture and analyze...")
+
+    detector = GOP3Detector(config)
+    screen = detector.capture_game()
+
+    cv2.imwrite("debug_capture.png", screen)
+    print("Saved debug_capture.png")
+
+    state = detector.detect_game_state(screen)
+    print(f"\nDetected game state:")
+    print(f"  Phase: {state['phase']}")
+    print(f"  Player total: {state['player_total']} {'(soft)' if state['is_soft'] else '(hard)'}")
+    print(f"  Dealer total: {state['dealer_total']}")
+    print(f"  Dealer card: {state['dealer_card']}")
+    print(f"  Buttons: {list(state['buttons'].keys())}")
+    print(f"  Button positions: {state['buttons']}")
+    print(f"  Can split: {state['can_split']}")
+    print(f"  Can double: {state['can_double']}")

@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python analyze_images.py:*)",
+      "Bash(python test_detection.py:*)",
+      "Bash(pip install:*)",
+      "Bash(where:*)",
+      "Bash(python get_position.py:*)",
+      "Bash(winget install:*)",
+      "Bash(python:*)",
+      "Bash(timeout 10 python:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
