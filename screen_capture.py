@@ -21,7 +21,16 @@ try:
     TESSERACT_AVAILABLE = True
 except ImportError:
     TESSERACT_AVAILABLE = False
-    print("Warning: pytesseract not available. Using position-based detection only.")
+    print("Warning: pytesseract not available.")
+
+# Try to import easyocr
+try:
+    import easyocr
+    EASYOCR_AVAILABLE = True
+    EASYOCR_READER = None  # Lazy init
+except ImportError:
+    EASYOCR_AVAILABLE = False
+    EASYOCR_READER = None
 
 
 class ScreenCapture:
@@ -129,8 +138,8 @@ class GOP3Detector:
             y_max = min(ys.max() + pad, thresh.shape[0] - 1)
             thresh = thresh[y_min:y_max + 1, x_min:x_max + 1]
 
-        # Add a small white border to help OCR
-        thresh = cv2.copyMakeBorder(thresh, 2, 2, 2, 2, cv2.BORDER_CONSTANT, value=255)
+        # Add a larger white border to help OCR recognize digits
+        thresh = cv2.copyMakeBorder(thresh, 20, 20, 20, 20, cv2.BORDER_CONSTANT, value=255)
 
         return thresh
 
@@ -189,19 +198,41 @@ class GOP3Detector:
         candidates.sort(key=lambda c: (c[0], c[1]), reverse=True)
 
         for circularity, area, x, y, cw, ch in candidates:
-            # Extract the blue circle region
-            circle_roi = roi[y:y+ch, x:x+cw]
+            # Extract the blue circle region, cropping inner area to exclude border
+            pad = int(min(cw, ch) * 0.15)
+            inner_x = x + pad
+            inner_y = y + pad
+            inner_w = cw - 2 * pad
+            inner_h = ch - 2 * pad
+            if inner_w < 10 or inner_h < 10:
+                circle_roi = roi[y:y+ch, x:x+cw]  # fallback to full if too small
+            else:
+                circle_roi = roi[inner_y:inner_y+inner_h, inner_x:inner_x+inner_w]
             if circle_roi.size == 0:
                 continue
 
             try:
-                fast_mode = getattr(self.config, 'OCR_FAST_MODE', False)
-                roi_candidates = [circle_roi]
-
                 text = ""
-                psms = getattr(self.config, 'OCR_PSMS', (8, 10))
-                for candidate in roi_candidates:
-                    processed = self._preprocess_for_ocr(candidate, ocr_scale)
+                ocr_engine = getattr(self.config, 'OCR_ENGINE', 'tesseract')
+                processed = self._preprocess_for_ocr(circle_roi, ocr_scale)
+
+                # Use EasyOCR if configured and available
+                if ocr_engine == 'easyocr' and EASYOCR_AVAILABLE:
+                    global EASYOCR_READER
+                    if EASYOCR_READER is None:
+                        EASYOCR_READER = easyocr.Reader(['en'], gpu=False, verbose=False)
+                    # Convert grayscale to BGR for EasyOCR
+                    if len(processed.shape) == 2:
+                        processed_bgr = cv2.cvtColor(processed, cv2.COLOR_GRAY2BGR)
+                    else:
+                        processed_bgr = processed
+                    results = EASYOCR_READER.readtext(processed_bgr, allowlist='0123456789/')
+                    if results:
+                        text = results[0][1]
+
+                # Fallback to Tesseract
+                if not text and TESSERACT_AVAILABLE:
+                    psms = getattr(self.config, 'OCR_PSMS', (8, 10))
                     for psm in psms:
                         text = pytesseract.image_to_string(
                             processed,
@@ -209,28 +240,6 @@ class GOP3Detector:
                         ).strip()
                         if text:
                             break
-                    if not text and not fast_mode:
-                        # Fallback: simpler thresholding for small single-digit totals
-                        gray = cv2.cvtColor(candidate, cv2.COLOR_BGR2GRAY)
-                        if ocr_scale and ocr_scale != 1.0:
-                            gray = cv2.resize(
-                                gray, None, fx=ocr_scale, fy=ocr_scale, interpolation=cv2.INTER_CUBIC
-                            )
-                        for thresh in [
-                            cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1],
-                            cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1],
-                        ]:
-                            for psm in psms:
-                                text = pytesseract.image_to_string(
-                                    thresh,
-                                    config=f'--psm {psm} --oem 3 -c tessedit_char_whitelist=0123456789/'
-                                ).strip()
-                                if text:
-                                    break
-                            if text:
-                                break
-                    if text or fast_mode:
-                        break
 
                 # Check for soft hand format: "low/high" (e.g., "10/20")
                 soft_match = re.match(r'(\d+)/(\d+)', text)
@@ -823,25 +832,26 @@ class GOP3Detector:
 
                     buttons.sort(key=lambda b: b[0])
                     if len(buttons) >= 2:
-                        mapping = {}
-                    if len(buttons) == 2:
-                        mapping = {'hit': buttons[0], 'stand': buttons[1]}
-                    elif len(buttons) == 3:
-                        mapping = {'hit': buttons[0], 'stand': buttons[1], 'double': buttons[2]}
-                    else:
-                        mapping = {
-                            'hit': buttons[0],
-                            'stand': buttons[1],
-                            'double': buttons[2],
-                            'split': buttons[3],
-                        }
-                    try:
-                        import gop3_config as config
-                        if getattr(config, 'DISABLE_SPLIT', False):
-                            mapping.pop('split', None)
-                    except Exception:
-                        pass
-                    return mapping
+                        if len(buttons) == 2:
+                            mapping = {'hit': buttons[0], 'stand': buttons[1]}
+                        elif len(buttons) == 3:
+                            mapping = {'hit': buttons[0], 'stand': buttons[1], 'double': buttons[2]}
+                        elif len(buttons) >= 4:
+                            mapping = {
+                                'hit': buttons[0],
+                                'stand': buttons[1],
+                                'double': buttons[2],
+                                'split': buttons[3],
+                            }
+                        else:
+                            mapping = {}
+                        try:
+                            import gop3_config as config
+                            if getattr(config, 'DISABLE_SPLIT', False):
+                                mapping.pop('split', None)
+                        except Exception:
+                            pass
+                        return mapping
 
             h, w = screen.shape[:2]
             radius = getattr(self.config, 'BUTTON_VALIDATE_RADIUS', 18)
