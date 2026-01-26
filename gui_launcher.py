@@ -109,6 +109,7 @@ class App(tk.Tk):
         row4.pack(fill="x", **pad)
         ttk.Button(row4, text="Run bot (test)", command=self._run_test).pack(side="left")
         ttk.Button(row4, text="Run bot", command=self._run_bot).pack(side="left", padx=6)
+        ttk.Button(row4, text="Run calibration", command=self._run_calibration).pack(side="left", padx=6)
 
         self.status = tk.StringVar(value="")
         ttk.Label(self, textvariable=self.status, foreground="#444").pack(fill="x", **pad)
@@ -137,6 +138,30 @@ class App(tk.Tk):
 
     def _run_test(self):
         self._spawn_bot(["--test"])
+
+    def _run_calibration(self):
+        script = ROOT / "calibrate_positions.py"
+        if not script.exists() and getattr(sys, "frozen", False):
+            exe_dir = Path(sys.executable).resolve().parent
+            candidates = [
+                exe_dir / "calibrate_positions.py",
+                exe_dir.parent / "calibrate_positions.py",
+            ]
+            for cand in candidates:
+                if cand.exists():
+                    script = cand
+                    break
+        if not script.exists():
+            self.status.set("Calibration script not found. Run from repo root or copy EXE there.")
+            return
+        try:
+            subprocess.Popen(
+                ["cmd", "/k", "python", str(script.name)],
+                cwd=str(script.parent),
+            )
+            self.status.set("Launched calibration in new console.")
+        except Exception as exc:
+            self.status.set(f"Failed to launch calibration: {exc}")
 
     def _spawn_bot(self, args):
         try:
