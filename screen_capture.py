@@ -8,10 +8,14 @@ import numpy as np
 import mss
 import pyautogui
 import time
-import random
+import ctypes
 import os
 import re
 from pathlib import Path
+
+from config_loader import load_config
+
+config = load_config()
 
 # Try to import pytesseract
 try:
@@ -148,7 +152,8 @@ class GOP3Detector:
         Detect a hand total from a blue circle indicator within a ROI.
         Returns (total, is_soft) or (None, False) if not detected.
         """
-        if not self.tesseract_available:
+        ocr_engine = getattr(self.config, 'OCR_ENGINE', 'tesseract')
+        if not self.tesseract_available and not (ocr_engine == 'easyocr' and EASYOCR_AVAILABLE):
             return (None, False)
         if roi is None or roi.size == 0:
             return (None, False)
@@ -213,7 +218,6 @@ class GOP3Detector:
 
             try:
                 text = ""
-                ocr_engine = getattr(self.config, 'OCR_ENGINE', 'tesseract')
                 processed = self._preprocess_for_ocr(circle_roi, ocr_scale)
 
                 # Use EasyOCR if configured and available
@@ -261,23 +265,44 @@ class GOP3Detector:
 
     def _ocr_text_from_circle(self, circle_roi) -> str:
         """OCR the circle region for raw total text."""
-        if not self.tesseract_available:
-            return ""
-
+        ocr_engine = getattr(self.config, 'OCR_ENGINE', 'tesseract')
         ocr_scale = getattr(self.config, 'OCR_SCALE', 2.0)
         psms = getattr(self.config, 'OCR_PSMS', (8, 10))
         text = ""
+
         try:
             processed = self._preprocess_for_ocr(circle_roi, ocr_scale)
-            for psm in psms:
-                text = pytesseract.image_to_string(
-                    processed,
-                    config=f'--psm {psm} --oem 3 -c tessedit_char_whitelist=0123456789/'
-                ).strip()
-                if text:
-                    break
         except Exception:
             return ""
+
+        # EasyOCR first if configured
+        if ocr_engine == 'easyocr' and EASYOCR_AVAILABLE:
+            try:
+                global EASYOCR_READER
+                if EASYOCR_READER is None:
+                    EASYOCR_READER = easyocr.Reader(['en'], gpu=False, verbose=False)
+                if len(processed.shape) == 2:
+                    processed_bgr = cv2.cvtColor(processed, cv2.COLOR_GRAY2BGR)
+                else:
+                    processed_bgr = processed
+                results = EASYOCR_READER.readtext(processed_bgr, allowlist='0123456789/')
+                if results:
+                    text = results[0][1]
+            except Exception:
+                text = ""
+
+        # Fallback to Tesseract if available
+        if not text and TESSERACT_AVAILABLE:
+            try:
+                for psm in psms:
+                    text = pytesseract.image_to_string(
+                        processed,
+                        config=f'--psm {psm} --oem 3 -c tessedit_char_whitelist=0123456789/'
+                    ).strip()
+                    if text:
+                        break
+            except Exception:
+                return ""
 
         return text
 
@@ -596,9 +621,6 @@ class GOP3Detector:
         Returns:
             Total as int or None
         """
-        if not self.tesseract_available:
-            return None
-
         h, w = screen.shape[:2]
 
         region = getattr(self.config, 'DEALER_TOTAL_REGION', self.config.DEALER_CARD_REGION)
@@ -845,12 +867,8 @@ class GOP3Detector:
                             }
                         else:
                             mapping = {}
-                        try:
-                            import gop3_config as config
-                            if getattr(config, 'DISABLE_SPLIT', False):
-                                mapping.pop('split', None)
-                        except Exception:
-                            pass
+                        if getattr(config, 'DISABLE_SPLIT', False):
+                            mapping.pop('split', None)
                         return mapping
 
             h, w = screen.shape[:2]
@@ -863,12 +881,8 @@ class GOP3Detector:
 
             visible = {}
             for name, (x, y) in positions.items():
-                try:
-                    import gop3_config as config
-                    if getattr(config, 'DISABLE_SPLIT', False) and name == 'split':
-                        continue
-                except Exception:
-                    pass
+                if getattr(config, 'DISABLE_SPLIT', False) and name == 'split':
+                    continue
                 x1 = max(0, x - radius)
                 x2 = min(w, x + radius)
                 y1 = max(0, y - radius)
@@ -1017,41 +1031,70 @@ class GameController:
         self.click_delay = click_delay
         pyautogui.PAUSE = 0.1
         pyautogui.FAILSAFE = True  # Move to corner to abort
+        self._last_focus_warn = 0.0
+
+    def _get_foreground_window_title(self) -> str:
+        try:
+            user32 = ctypes.windll.user32
+            hwnd = user32.GetForegroundWindow()
+            if not hwnd:
+                return ""
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length == 0:
+                return ""
+            buf = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, buf, length + 1)
+            return buf.value
+        except Exception:
+            return ""
+
+    def _get_expected_window_title(self) -> str:
+        expected = getattr(config, 'GAME_WINDOW_TITLE', None)
+        return expected
+
+    def _is_game_window_focused(self) -> bool:
+        expected = self._get_expected_window_title()
+        if not expected:
+            return True
+
+        title = self._get_foreground_window_title()
+        if not title:
+            return False
+
+        return expected.lower() in title.lower()
+
+    def _log_focus_block(self, expected: str, title: str) -> None:
+        if not getattr(config, 'FOCUS_CHECK_LOG', True):
+            return
+        interval = getattr(config, 'FOCUS_CHECK_LOG_INTERVAL', 1.0)
+
+        now = time.time()
+        if now - self._last_focus_warn < interval:
+            return
+        self._last_focus_warn = now
+        shown_title = title if title else "(unknown)"
+        print(f"[WARN] Click blocked: foreground window '{shown_title}' does not match GAME_WINDOW_TITLE='{expected}'")
 
     def click(self, x, y):
         """Click at screen coordinates."""
-        min_move = getattr(self, 'mouse_move_min', None)
-        max_move = getattr(self, 'mouse_move_max', None)
-        midpoint_jitter = getattr(self, 'mouse_midpoint_jitter', None)
-
-        if min_move is None or max_move is None or midpoint_jitter is None:
-            try:
-                import gop3_config as config
-                min_move = getattr(config, 'MOUSE_MOVE_MIN', 0.18)
-                max_move = getattr(config, 'MOUSE_MOVE_MAX', 0.45)
-                midpoint_jitter = getattr(config, 'MOUSE_MIDPOINT_JITTER', 35)
-            except Exception:
-                min_move, max_move, midpoint_jitter = 0.18, 0.45, 35
-
-        start_x, start_y = pyautogui.position()
-        mid_x = int((start_x + x) / 2 + random.randint(-midpoint_jitter, midpoint_jitter))
-        mid_y = int((start_y + y) / 2 + random.randint(-midpoint_jitter, midpoint_jitter))
-
-        pyautogui.moveTo(mid_x, mid_y, duration=random.uniform(min_move, max_move))
-        pyautogui.moveTo(x, y, duration=random.uniform(min_move, max_move))
+        # Direct click for accuracy (no midpoint movement or jitter).
         pyautogui.click(x, y)
         time.sleep(self.click_delay)
 
     def click_button(self, position):
         """Click a button at the given position."""
         if position:
+            expected = self._get_expected_window_title()
+            if expected and not self._is_game_window_focused():
+                title = self._get_foreground_window_title()
+                self._log_focus_block(expected, title)
+                return False
             self.click(position[0], position[1])
             return True
         return False
 
 
 if __name__ == '__main__':
-    import gop3_config as config
 
     print("Testing GOP3 detection...")
     print("Make sure Governor of Poker 3 is visible on screen.")

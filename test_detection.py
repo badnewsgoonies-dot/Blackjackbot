@@ -5,7 +5,9 @@ Test script to verify detection is working on calibration images.
 import cv2
 import os
 from screen_capture import GOP3Detector
-import gop3_config as config
+from config_loader import load_config
+
+config = load_config()
 
 
 def test_on_image(image_path, detector):

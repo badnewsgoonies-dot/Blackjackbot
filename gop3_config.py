@@ -6,6 +6,9 @@ Screen resolution: 3440x1440
 # Game window - set to None to capture full screen
 GAME_WINDOW = None
 
+# Foreground window title substring required for clicking (set to None to disable)
+GAME_WINDOW_TITLE = "Governor of Poker 3"
+
 # Screen resolution (for reference)
 SCREEN_WIDTH = 3200
 SCREEN_HEIGHT = 1800
@@ -92,6 +95,19 @@ POST_CLICK_DELAY = 0.3  # Wait after clicking before next scan
 # Human-like delay settings (disabled for speed)
 HUMAN_DELAY_MIN = 0.0   # Minimum delay before clicking (seconds)
 HUMAN_DELAY_MAX = 0.0   # Maximum delay before clicking (seconds)
+
+# Click verification (keep tight so turns stay within timing budget)
+CLICK_VERIFY_ENABLED = True
+CLICK_VERIFY_TIMEOUT = 0.7
+CLICK_VERIFY_INTERVAL = 0.08
+CLICK_VERIFY_STABLE_COUNT = 2
+CLICK_VERIFY_RETRIES = 0
+CLICK_VERIFY_RETRY_ACTIONS = ("stand",)
+CLICK_VERIFY_LOG = True
+
+# Foreground focus logging
+FOCUS_CHECK_LOG = True
+FOCUS_CHECK_LOG_INTERVAL = 1.0
 
 # Original human-like settings (uncomment to re-enable):
 # DECISION_DELAY = 0.8

@@ -5,14 +5,15 @@ Plays optimal basic strategy by reading the screen and clicking buttons.
 
 import time
 import sys
-import random
 from enum import Enum
 
 import keyboard
 
 from screen_capture import GOP3Detector, GameController
 from basic_strategy import get_action, HARD_STRATEGY, SOFT_STRATEGY, PAIR_STRATEGY
-import gop3_config as config
+from config_loader import load_config
+
+config = load_config()
 
 
 # Global flag for hotkey stop
@@ -84,20 +85,13 @@ class BlackjackBot:
             print(f"[DEBUG] {message}")
 
     def human_delay(self, subsequent_hit=False):
-        """Add a random delay to seem more human-like.
+        """Human-like delay disabled for deterministic clicking.
 
         Args:
             subsequent_hit: If True, use 1/4 of normal delay (for repeated hits)
         """
-        delay_min = getattr(config, 'HUMAN_DELAY_MIN', 0.3)
-        delay_max = getattr(config, 'HUMAN_DELAY_MAX', 1.2)
-        delay = random.uniform(delay_min, delay_max)
-
-        if subsequent_hit:
-            delay = delay / 4  # 1/4 delay for subsequent hits
-
-        self.log(f"Human delay: {delay:.2f}s {'(subsequent hit)' if subsequent_hit else ''}")
-        time.sleep(delay)
+        # Safety/human-like delay disabled for deterministic clicking.
+        return
 
     def log_total_changes(self, player_total, is_soft, dealer_total):
         """Print player/dealer totals when they change."""
@@ -254,24 +248,92 @@ class BlackjackBot:
 
     def jitter_button_position(self, position):
         """Apply a small jitter to button positions to avoid clicking the exact same pixel."""
-        if not position:
-            return position
-
-        jitter_x = getattr(config, 'BUTTON_JITTER_X', 6)
-        jitter_y_min, jitter_y_max = getattr(config, 'BUTTON_JITTER_Y_RANGE', (1249, 1261))
-
-        x, _ = position
-        jittered_x = x + random.randint(-jitter_x, jitter_x)
-        jittered_y = random.randint(jitter_y_min, jitter_y_max)
-
-        return (jittered_x, jittered_y)
+        # Safety jitter disabled to avoid misclicks.
+        return position
 
     def jitter_point(self, position, jitter=3):
         """Apply small jitter to a generic point."""
-        if not position:
-            return position
-        x, y = position
-        return (x + random.randint(-jitter, jitter), y + random.randint(-jitter, jitter))
+        # Safety jitter disabled to avoid misclicks.
+        return position
+
+    def verify_action_applied(self, action: str, prev_state: dict) -> bool:
+        """Verify that the last click produced a visible state change."""
+        if not getattr(config, 'CLICK_VERIFY_ENABLED', True):
+            return True
+
+        timeout = getattr(config, 'CLICK_VERIFY_TIMEOUT', 0.7)
+        interval = getattr(config, 'CLICK_VERIFY_INTERVAL', 0.08)
+        stable_needed = getattr(config, 'CLICK_VERIFY_STABLE_COUNT', 2)
+        log_enabled = getattr(config, 'CLICK_VERIFY_LOG', True)
+
+        prev_player_total = prev_state.get('player_total')
+        prev_is_soft = prev_state.get('is_soft', False)
+        prev_dealer_total = prev_state.get('dealer_total')
+        prev_buttons = prev_state.get('buttons', {}) or {}
+        prev_phase = prev_state.get('phase')
+        prev_button_keys = set(prev_buttons.keys())
+
+        def indicates_change(state: dict) -> bool:
+            phase = state.get('phase')
+            player_total = state.get('player_total')
+            is_soft = state.get('is_soft', False)
+            dealer_total = state.get('dealer_total')
+            buttons = state.get('buttons', {}) or {}
+            button_keys = set(buttons.keys())
+
+            if action in ('hit', 'double', 'split'):
+                if player_total is not None and (
+                    prev_player_total is None
+                    or player_total != prev_player_total
+                    or is_soft != prev_is_soft
+                ):
+                    return True
+                if button_keys and prev_button_keys and button_keys != prev_button_keys:
+                    return True
+                return False
+
+            if action == 'stand':
+                if phase != prev_phase or phase != 'player_turn':
+                    return True
+                if button_keys and prev_button_keys and button_keys != prev_button_keys:
+                    return True
+                if dealer_total is not None and prev_dealer_total is not None and dealer_total != prev_dealer_total:
+                    return True
+                return False
+
+            return False
+
+        start = time.time()
+        last_sig = None
+        stable = 0
+        while time.time() - start < timeout and not _stop_requested:
+            screen = self.detector.capture_game()
+            state = self.detector.detect_game_state(screen)
+            if not state:
+                time.sleep(interval)
+                continue
+
+            sig = (
+                state.get('phase'),
+                state.get('player_total'),
+                state.get('is_soft', False),
+                state.get('dealer_total'),
+                tuple(sorted((state.get('buttons', {}) or {}).keys())),
+            )
+            if sig == last_sig:
+                stable += 1
+            else:
+                stable = 1
+                last_sig = sig
+
+            if stable >= stable_needed and indicates_change(state):
+                return True
+
+            time.sleep(interval)
+
+        if log_enabled:
+            self.log(f"Click verification timed out for action '{action}'")
+        return False
 
     def get_strategy_action(self, player_total: int, dealer_card: str,
                             can_double: bool, can_split: bool, is_soft: bool = False) -> str:
@@ -362,7 +424,7 @@ class BlackjackBot:
         self.log("No strategy match, defaulting to stand")
         return 'stand'
 
-    def execute_action(self, action: str, buttons: dict) -> bool:
+    def execute_action(self, action: str, buttons: dict, prev_state: dict) -> bool:
         """Click the button for the chosen action."""
         if action == 'split' and getattr(config, 'DISABLE_SPLIT', False):
             self.log("Split disabled")
@@ -385,7 +447,26 @@ class BlackjackBot:
             subsequent_hit = (action == 'hit' and self.last_action == 'hit')
             self.human_delay(subsequent_hit=subsequent_hit)
 
-            self.controller.click_button(pos)
+            clicked = self.controller.click_button(pos)
+            if not clicked:
+                self.log("Click blocked or failed to send")
+                return False
+
+            verified = self.verify_action_applied(action, prev_state)
+            if not verified:
+                retries = getattr(config, 'CLICK_VERIFY_RETRIES', 0)
+                retry_actions = getattr(config, 'CLICK_VERIFY_RETRY_ACTIONS', ("stand",))
+                if retries > 0 and action in retry_actions:
+                    for _ in range(retries):
+                        self.log(f"Retrying click for action '{action}'")
+                        self.controller.click_button(pos)
+                        if self.verify_action_applied(action, prev_state):
+                            verified = True
+                            break
+                if not verified:
+                    self.log(f"Action '{action}' not verified; skipping state advance")
+                    return False
+
             self.last_action = action
             self.actions_in_round += 1
             return True
@@ -492,7 +573,14 @@ class BlackjackBot:
             print(f"\nPlayer: {hand_type} {player_total} vs Dealer: {dealer_total}")
             print(f"  Strategy: {action.upper()}")
 
-            if self.execute_action(action, buttons):
+            prev_state = {
+                'phase': phase,
+                'player_total': player_total,
+                'is_soft': is_soft,
+                'dealer_total': dealer_total,
+                'buttons': buttons,
+            }
+            if self.execute_action(action, buttons, prev_state):
                 self.hands_played += 1
                 self.pending_player_total = player_total
                 self.pending_player_soft = is_soft
