@@ -1,6 +1,7 @@
 """Simple GUI launcher for GOP3 Blackjack bot tools (Windows)."""
 
 import ctypes
+import os
 import re
 import subprocess
 import sys
@@ -43,8 +44,21 @@ def read_config_value() -> str:
     except Exception:
         return ""
 
+def read_config_bool(name: str, default: bool = False) -> bool:
+    try:
+        cfg = load_config()
+        value = getattr(cfg, name, default)
+        return bool(value)
+    except Exception:
+        return bool(default)
 
-def write_config_value(value: str, disable: bool) -> bool:
+def write_config_value(
+    value: str,
+    disable: bool,
+    *,
+    diagnostics_enabled: bool = False,
+    diagnostics_zip: bool = False,
+) -> bool:
     if not CONFIG_PATH.exists():
         source = get_bundled_config_path()
         if source.exists():
@@ -69,8 +83,24 @@ def write_config_value(value: str, disable: bool) -> bool:
     else:
         new_text = text + "\n" + replacement + "\n"
 
+    def upsert_bool(src: str, key: str, val: bool) -> str:
+        rep = f"{key} = {str(bool(val))}"
+        pattern = rf"^{re.escape(key)}\s*=\s*.*$"
+        if re.search(pattern, src, flags=re.MULTILINE):
+            return re.sub(pattern, rep, src, flags=re.MULTILINE)
+        return src + "\n" + rep + "\n"
+
+    new_text = upsert_bool(new_text, "DIAGNOSTICS_ENABLED", diagnostics_enabled)
+    new_text = upsert_bool(new_text, "DIAGNOSTICS_ZIP_ON_EXIT", diagnostics_zip)
+
     CONFIG_PATH.write_text(new_text, encoding="utf-8")
     return True
+
+
+def _python_executable() -> str:
+    if not getattr(sys, "frozen", False):
+        return sys.executable
+    return os.environ.get("PYTHON", "python")
 
 
 class App(tk.Tk):
@@ -82,6 +112,8 @@ class App(tk.Tk):
         self.current_title = tk.StringVar(value="(not fetched)")
         self.config_title = tk.StringVar(value=read_config_value())
         self.disable_focus = tk.BooleanVar(value=False)
+        self.diagnostics_enabled = tk.BooleanVar(value=read_config_bool("DIAGNOSTICS_ENABLED", False))
+        self.diagnostics_zip = tk.BooleanVar(value=read_config_bool("DIAGNOSTICS_ZIP_ON_EXIT", False))
 
         self._build_ui()
 
@@ -103,6 +135,8 @@ class App(tk.Tk):
         row3 = ttk.Frame(self)
         row3.pack(fill="x", **pad)
         ttk.Checkbutton(row3, text="Disable focus check (set to None)", variable=self.disable_focus).pack(side="left")
+        ttk.Checkbutton(row3, text="Enable diagnostics dump", variable=self.diagnostics_enabled).pack(side="left", padx=10)
+        ttk.Checkbutton(row3, text="Zip on exit", variable=self.diagnostics_zip).pack(side="left", padx=6)
         ttk.Button(row3, text="Save to config", command=self._save_config).pack(side="left", padx=10)
 
         row4 = ttk.Frame(self)
@@ -127,9 +161,14 @@ class App(tk.Tk):
             self.status.set("No foreground title detected.")
 
     def _save_config(self):
-        ok = write_config_value(self.config_title.get(), self.disable_focus.get())
+        ok = write_config_value(
+            self.config_title.get(),
+            self.disable_focus.get(),
+            diagnostics_enabled=self.diagnostics_enabled.get(),
+            diagnostics_zip=self.diagnostics_zip.get(),
+        )
         if ok:
-            self.status.set("Saved GAME_WINDOW_TITLE to gop3_config.py")
+            self.status.set("Saved settings to gop3_config.py")
         else:
             self.status.set("Failed to write config.")
 
@@ -155,11 +194,13 @@ class App(tk.Tk):
             self.status.set("Calibration script not found. Run from repo root or copy EXE there.")
             return
         try:
+            python_exe = _python_executable()
             subprocess.Popen(
-                ["cmd", "/k", "python", str(script.name)],
+                [python_exe, str(script.name)],
                 cwd=str(script.parent),
+                creationflags=subprocess.CREATE_NEW_CONSOLE,
             )
-            self.status.set("Launched calibration in new console.")
+            self.status.set("Launched calibration in new console window.")
         except Exception as exc:
             self.status.set(f"Failed to launch calibration: {exc}")
 
