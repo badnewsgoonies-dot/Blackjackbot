@@ -56,6 +56,7 @@ In the calibration console:
 If you change resolution, fixed button clicks will auto-scale, but rerun calibration for best accuracy.
 Auto-calibration uses anchor templates (see `anchors/`) to align clicks/ROIs across resolutions; if anchors don’t match (theme/layout changes), it falls back to basic scaling.
 Template mode now builds digit templates from `timing_frames/` by default.
+To disable auto-calibration, set `AUTO_CALIBRATION_ENABLED = False` in `gop3_config.py`.
 
 What the code does (and where):
 - `calibrate_positions.py` captures pixel coordinates via `pyautogui.position()`.

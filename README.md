@@ -46,6 +46,12 @@ Anchor sanity test:
 python test_anchors.py --dir timing_frames --limit 30
 ```
 
+Frame regression check (headless):
+
+```bash
+python test_regression_frames.py --dir timing_frames --limit 40
+```
+
 ## Usage
 
 ### Run the Bot
@@ -127,6 +133,7 @@ The bot follows standard basic strategy ("the book"):
 - Template mode now uses `timing_frames/` as its source when building digit templates (`TEMPLATE_TOTALS_PATH`).
 - HUD overlay shows `cal:` status and `vis:` status (visual stability gate) while the bot runs.
 - GUI includes a **Test anchors** button that runs a no-click anchor + visual check on the current screen.
+ - To disable auto-calibration, set `AUTO_CALIBRATION_ENABLED = False` in `gop3_config.py`.
 
 ### Platform notes
 - Focus checks use Win32 APIs; on macOS/Linux, set `GAME_WINDOW_TITLE = None` to avoid clicks being blocked by the foreground-title check.
