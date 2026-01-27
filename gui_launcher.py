@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk
@@ -297,26 +298,69 @@ class DebugWindow(tk.Toplevel):
         box2 = ttk.LabelFrame(self, text="Live Read (From Screen)")
         box2.pack(fill="x", **pad)
 
-        ttk.Button(box2, text="Read player total", command=self._read_player).grid(row=0, column=0, padx=6, pady=4, sticky="w")
+        self.btn_read_player = ttk.Button(box2, text="Read player total", command=self._read_player)
+        self.btn_read_player.grid(row=0, column=0, padx=6, pady=4, sticky="w")
         ttk.Label(box2, textvariable=self.player_out, width=40).grid(row=0, column=1, padx=6, pady=4, sticky="w")
 
-        ttk.Button(box2, text="Read dealer total", command=self._read_dealer).grid(row=1, column=0, padx=6, pady=4, sticky="w")
+        self.btn_read_dealer = ttk.Button(box2, text="Read dealer total", command=self._read_dealer)
+        self.btn_read_dealer.grid(row=1, column=0, padx=6, pady=4, sticky="w")
         ttk.Label(box2, textvariable=self.dealer_out, width=40).grid(row=1, column=1, padx=6, pady=4, sticky="w")
 
         ttk.Label(self, textvariable=self.status, foreground="#444").pack(fill="x", **pad)
+
+    def _set_busy(self, busy: bool, msg: str = "") -> None:
+        try:
+            state = "disabled" if busy else "normal"
+            if hasattr(self, "btn_read_player"):
+                self.btn_read_player.configure(state=state)
+            if hasattr(self, "btn_read_dealer"):
+                self.btn_read_dealer.configure(state=state)
+        except Exception:
+            pass
+        if msg:
+            self.status.set(msg)
 
     def _reload_config(self):
         try:
             if not self.config_path.exists():
                 raise FileNotFoundError(str(self.config_path))
             self.cfg = load_config_from_path(self.config_path)
-            from screen_capture import GOP3Detector
-            self.detector = GOP3Detector(self.cfg)
-            self.status.set("Config reloaded.")
+            # Important: do NOT import screen_capture/GOP3Detector here.
+            # EasyOCR (torch) can take seconds to import and will freeze the UI thread.
+            # We'll initialize the detector lazily when the user requests a read.
+            self.detector = None
+            self.status.set("Config reloaded (detector lazy-loaded on first read).")
         except Exception as exc:
             self.cfg = None
             self.detector = None
             self.status.set(f"Reload failed: {exc}")
+
+    def _ensure_detector(self) -> bool:
+        if self.detector is not None:
+            return True
+        if self.cfg is None:
+            self.status.set("No config loaded.")
+            return False
+        try:
+            from screen_capture import GOP3Detector
+            self.detector = GOP3Detector(self.cfg)
+            return True
+        except Exception as exc:
+            self.detector = None
+            self.status.set(f"Detector init failed: {exc}")
+            return False
+
+    def _run_bg(self, fn, *, busy_msg: str):
+        """Run a potentially slow function in a background thread and keep Tk responsive."""
+        self._set_busy(True, busy_msg)
+
+        def runner():
+            try:
+                fn()
+            finally:
+                self.after(0, lambda: self._set_busy(False))
+
+        threading.Thread(target=runner, daemon=True).start()
 
     def _pos_for(self, name: str):
         if not self.cfg:
@@ -345,31 +389,43 @@ class DebugWindow(tk.Toplevel):
             self.status.set(f"Move/click failed: {exc}")
 
     def _read_player(self):
-        if not self.detector:
-            self.status.set("Detector not initialized (reload config).")
-            return
-        try:
-            screen = self.detector.capture_game()
-            total, is_soft = self.detector.detect_player_total(screen)
-            if total is None:
-                self.player_out.set("player: None")
-            else:
-                self.player_out.set(f"player: {'soft' if is_soft else 'hard'} {total}")
-            self.status.set("Player read complete.")
-        except Exception as exc:
-            self.status.set(f"Player read failed: {exc}")
+        def task():
+            if not self._ensure_detector():
+                return
+            try:
+                screen = self.detector.capture_game()
+                total, is_soft = self.detector.detect_player_total(screen)
+
+                def apply():
+                    if total is None:
+                        self.player_out.set("player: None")
+                    else:
+                        self.player_out.set(f"player: {'soft' if is_soft else 'hard'} {total}")
+                    self.status.set("Player read complete.")
+
+                self.after(0, apply)
+            except Exception as exc:
+                self.after(0, lambda: self.status.set(f"Player read failed: {exc}"))
+
+        self._run_bg(task, busy_msg="Reading player total (may take a few seconds first time)...")
 
     def _read_dealer(self):
-        if not self.detector:
-            self.status.set("Detector not initialized (reload config).")
-            return
-        try:
-            screen = self.detector.capture_game()
-            total = self.detector.detect_dealer_total(screen)
-            self.dealer_out.set(f"dealer: {total if total is not None else 'None'}")
-            self.status.set("Dealer read complete.")
-        except Exception as exc:
-            self.status.set(f"Dealer read failed: {exc}")
+        def task():
+            if not self._ensure_detector():
+                return
+            try:
+                screen = self.detector.capture_game()
+                total = self.detector.detect_dealer_total(screen)
+
+                def apply():
+                    self.dealer_out.set(f"dealer: {total if total is not None else 'None'}")
+                    self.status.set("Dealer read complete.")
+
+                self.after(0, apply)
+            except Exception as exc:
+                self.after(0, lambda: self.status.set(f"Dealer read failed: {exc}"))
+
+        self._run_bg(task, busy_msg="Reading dealer total (may take a few seconds first time)...")
 
 
 def run_bot_mode(args):

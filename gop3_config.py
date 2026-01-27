@@ -7,7 +7,7 @@ Screen resolution: 3440x1440
 GAME_WINDOW = None
 
 # Foreground window title substring required for clicking (set to None to disable)
-GAME_WINDOW_TITLE = "GOP3"
+GAME_WINDOW_TITLE = None
 
 # Capture only the game window rect (recommended if you run windowed or multi-monitor).
 # If enabled, the detector will try to find a visible window whose title contains GAME_WINDOW_TITLE.
@@ -21,14 +21,14 @@ SCREEN_HEIGHT = 1800
 # These are the exact center positions of each button
 # Adjusted +80 pixels right and -80 pixels up (diagonally up-right)
 BUTTON_POSITIONS = {
-    'hit': (570, 1416),
-    'stand': (788, 1414),
-    'double': (986, 1411),
-    'split': (1198, 1413),
+    'hit': (1324, 1424),
+    'stand': (1580, 1434),
+    'double': (1828, 1430),
+    'split': (2085, 1428),
 }
 
 # Bet button position (1K bet - leftmost bet button)
-BET_BUTTON_POSITION = (575, 1414)
+BET_BUTTON_POSITION = (1323, 1425)
 
 # Use fixed positions instead of detection
 USE_FIXED_BUTTONS = True
@@ -63,28 +63,28 @@ BUTTON_MIN_HEIGHT = 30
 # Player total region (where the number like "12" or "10/20" appears)
 # Based on analysis: bottom center area
 PLAYER_TOTAL_REGION = {
-    'x_percent': (0.14, 0.34),
-    'y_percent': (0.59, 0.73),
+    'x_percent': (0.39, 0.59),
+    'y_percent': (0.57, 0.71),
 }
 
 # Dealer card region (where dealer's up card appears)
 # Based on analysis: top center area
 DEALER_CARD_REGION = {
-    'x_percent': (0.16, 0.32),
-    'y_percent': (0.33, 0.57),
+    'x_percent': (0.41, 0.57),
+    'y_percent': (0.27, 0.51),
 }
 
 # Dealer total region (blue circle indicator with one card face down)
 # Defaults to the same area as the dealer card region.
 DEALER_TOTAL_REGION = {
-    'x_percent': (0.16, 0.32),
-    'y_percent': (0.33, 0.57),
+    'x_percent': (0.41, 0.57),
+    'y_percent': (0.27, 0.51),
 }
 
 # Player card region (used for sanity-check OCR of card ranks)
 PLAYER_CARD_REGION = {
-    'x_percent': (0.17, 0.31),
-    'y_percent': (0.59, 0.72),
+    'x_percent': (0.42, 0.56),
+    'y_percent': (0.58, 0.71),
 }
 
 # Card rank detection
@@ -192,6 +192,11 @@ CARD_SANITY_STRICT = True
 # Total read mode: "template" (fast) or "ocr"
 TOTAL_READ_MODE = "ocr"
 OCR_ENGINE = "easyocr"  # "tesseract" or "easyocr"
+
+# EasyOCR (only used when OCR_ENGINE="easyocr").
+# Note: EasyOCR bundles PyTorch, which makes EXE builds much larger and slower to start.
+EASYOCR_MODEL_DIR = None  # optional path to cache models in a predictable location
+EASYOCR_DOWNLOAD = True   # set False to prevent model downloads on first run
 TEMPLATE_TOTALS_PATH = "Calibration Images"
 TEMPLATE_CHARSET = "0123456789/"
 TEMPLATE_SIZE = (24, 36)

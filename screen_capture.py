@@ -34,14 +34,32 @@ except ImportError:
     TESSERACT_AVAILABLE = False
     print("Warning: pytesseract not available.")
 
-# Try to import easyocr
-try:
-    import easyocr
-    EASYOCR_AVAILABLE = True
-    EASYOCR_READER = None  # Lazy init
-except ImportError:
-    EASYOCR_AVAILABLE = False
-    EASYOCR_READER = None
+EASYOCR_READER = None  # Lazy init (torch import can be expensive)
+
+
+def _get_easyocr_reader(cfg):
+    """Create (or reuse) a global EasyOCR reader. Returns None if unavailable."""
+    global EASYOCR_READER
+    if EASYOCR_READER is not None:
+        return EASYOCR_READER
+
+    try:
+        import easyocr  # heavy (torch); keep lazy
+    except Exception:
+        return None
+
+    kwargs = {}
+    model_dir = getattr(cfg, "EASYOCR_MODEL_DIR", None)
+    if model_dir:
+        kwargs["model_storage_directory"] = str(model_dir)
+    kwargs["download_enabled"] = bool(getattr(cfg, "EASYOCR_DOWNLOAD", True))
+
+    try:
+        EASYOCR_READER = easyocr.Reader(["en"], gpu=False, verbose=False, **kwargs)
+        return EASYOCR_READER
+    except Exception:
+        EASYOCR_READER = None
+        return None
 
 
 class ScreenCapture:
@@ -294,7 +312,7 @@ class GOP3Detector:
         Returns (total, is_soft) or (None, False) if not detected.
         """
         ocr_engine = getattr(self.config, 'OCR_ENGINE', 'tesseract')
-        if not self.tesseract_available and not (ocr_engine == 'easyocr' and EASYOCR_AVAILABLE):
+        if not self.tesseract_available and ocr_engine != 'easyocr':
             return (None, False)
         if roi is None or roi.size == 0:
             return (None, False)
@@ -377,18 +395,18 @@ class GOP3Detector:
                     self._diag_save(diag, image_name=f"{tag}_candidate_{idx}_processed.png", image=processed)
 
                 # Use EasyOCR if configured and available
-                if ocr_engine == 'easyocr' and EASYOCR_AVAILABLE:
-                    global EASYOCR_READER
-                    if EASYOCR_READER is None:
-                        EASYOCR_READER = easyocr.Reader(['en'], gpu=False, verbose=False)
-                    # Convert grayscale to BGR for EasyOCR
-                    if len(processed.shape) == 2:
-                        processed_bgr = cv2.cvtColor(processed, cv2.COLOR_GRAY2BGR)
-                    else:
-                        processed_bgr = processed
-                    results = EASYOCR_READER.readtext(processed_bgr, allowlist='0123456789/')
-                    if results:
-                        text = results[0][1]
+                if ocr_engine == 'easyocr':
+                    reader = _get_easyocr_reader(self.config)
+                    results = []
+                    if reader is not None:
+                        # Convert grayscale to BGR for EasyOCR
+                        if len(processed.shape) == 2:
+                            processed_bgr = cv2.cvtColor(processed, cv2.COLOR_GRAY2BGR)
+                        else:
+                            processed_bgr = processed
+                        results = reader.readtext(processed_bgr, allowlist='0123456789/')
+                        if results:
+                            text = results[0][1]
                     if diag and getattr(diag, "enabled", False) and idx < 3:
                         self._diag_save(
                             diag,
@@ -438,16 +456,16 @@ class GOP3Detector:
         self._diag_save(diag, image_name=f"{tag}_processed.png", image=processed)
 
         # EasyOCR first if configured
-        if ocr_engine == 'easyocr' and EASYOCR_AVAILABLE:
+        if ocr_engine == 'easyocr':
             try:
-                global EASYOCR_READER
-                if EASYOCR_READER is None:
-                    EASYOCR_READER = easyocr.Reader(['en'], gpu=False, verbose=False)
+                reader = _get_easyocr_reader(self.config)
+                if reader is None:
+                    raise RuntimeError("easyocr not available")
                 if len(processed.shape) == 2:
                     processed_bgr = cv2.cvtColor(processed, cv2.COLOR_GRAY2BGR)
                 else:
                     processed_bgr = processed
-                results = EASYOCR_READER.readtext(processed_bgr, allowlist='0123456789/')
+                results = reader.readtext(processed_bgr, allowlist='0123456789/')
                 if results:
                     text = results[0][1]
                 self._diag_save(
