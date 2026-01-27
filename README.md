@@ -43,6 +43,14 @@ This tests detection on the calibration images.
 python blackjack_bot.py
 ```
 
+### Run the GUI (No Terminal)
+
+- Double-click `launch_gui.bat` (recommended on Windows), or run:
+
+```bash
+python gui_launcher.py
+```
+
 ### Options
 
 - `--debug` or `-d`: Enable debug output (shows detection details)

@@ -29,6 +29,9 @@ Before calibrating or running:
 python gui_launcher.py
 ```
 
+No-terminal option (Windows):
+- Double-click `launch_gui.bat`
+
 In the GUI:
 - Click **Refresh** to read the current foreground window title.
 - Click **Set from foreground** (optional).
@@ -85,4 +88,3 @@ What should happen in real time:
 - Game window title mismatch -> update `GAME_WINDOW_TITLE` via GUI.
 - Buttons not detected as visible -> re-calibrate or adjust HSV validation settings.
 - Game not foreground -> focus check blocks clicks (expected behavior).
-
