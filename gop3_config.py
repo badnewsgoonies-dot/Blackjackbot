@@ -56,28 +56,28 @@ BUTTON_MIN_HEIGHT = 30
 # Player total region (where the number like "12" or "10/20" appears)
 # Based on analysis: bottom center area
 PLAYER_TOTAL_REGION = {
-    'x_percent': (0.14, 0.34),
-    'y_percent': (0.59, 0.73),
+    'x_percent': (0.42, 0.57),
+    'y_percent': (0.57, 0.82),
 }
 
 # Dealer card region (where dealer's up card appears)
 # Based on analysis: top center area
 DEALER_CARD_REGION = {
-    'x_percent': (0.16, 0.32),
-    'y_percent': (0.33, 0.57),
+    'x_percent': (0.44, 0.56),
+    'y_percent': (0.30, 0.52),
 }
 
 # Dealer total region (blue circle indicator with one card face down)
 # Defaults to the same area as the dealer card region.
 DEALER_TOTAL_REGION = {
-    'x_percent': (0.16, 0.32),
-    'y_percent': (0.33, 0.57),
+    'x_percent': (0.44, 0.56),
+    'y_percent': (0.30, 0.52),
 }
 
 # Player card region (used for sanity-check OCR of card ranks)
 PLAYER_CARD_REGION = {
-    'x_percent': (0.17, 0.31),
-    'y_percent': (0.59, 0.72),
+    'x_percent': (0.42, 0.57),
+    'y_percent': (0.57, 0.82),
 }
 
 # Card rank detection
