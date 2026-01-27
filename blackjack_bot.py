@@ -3,6 +3,8 @@ Blackjack Bot for Governor of Poker 3.
 Plays optimal basic strategy by reading the screen and clicking buttons.
 """
 
+import json
+import os
 import time
 
 import keyboard
@@ -21,6 +23,7 @@ except Exception:
 
 # Global flag for hotkey stop
 _stop_requested = False
+_paused = False
 
 
 def _request_stop():
@@ -28,6 +31,14 @@ def _request_stop():
     global _stop_requested
     _stop_requested = True
     print("\n[HOTKEY] Ctrl+Alt+J pressed - stopping bot...")
+
+
+def _toggle_pause():
+    """Toggle paused state."""
+    global _paused
+    _paused = not _paused
+    state = "PAUSED" if _paused else "RESUMED"
+    print(f"\n[HOTKEY] Ctrl+Alt+P -> {state}")
 
 
 class BlackjackBot:
@@ -66,6 +77,9 @@ class BlackjackBot:
                 pass
 
         self.running = False
+        self.hud_enabled = bool(os.environ.get("GOP3_HUD_STATE"))
+        self.hud_path = os.environ.get("GOP3_HUD_PATH")
+        self.last_decision = ""
         self.last_action = None
         self.hands_played = 0
         self.last_player_total = None
@@ -534,6 +548,7 @@ class BlackjackBot:
             require_player_total_change=self.waiting_for_total_update
         )
         if state is None:
+            self._write_hud_state(None, None, None, None, "betting")
             return False
 
         self.log(f"State: {state}")
@@ -545,6 +560,13 @@ class BlackjackBot:
         dealer_total = state.get('dealer_total')
         totals_confirmed = state.get('totals_confirmed', False)
         totals_changed = state.get('totals_changed', False)
+        self._write_hud_state(player_total, dealer_total, is_soft, None, phase)
+
+        if _paused:
+            self.log("Paused - no action taken")
+            self._write_hud_state(player_total, dealer_total, is_soft, "paused", phase)
+            time.sleep(getattr(config, "SCAN_INTERVAL", 0.1))
+            return False
 
         if self.waiting_for_total_update:
             if phase != 'player_turn':
@@ -570,16 +592,20 @@ class BlackjackBot:
 
             if player_total is None:
                 self.log("Could not detect player total")
+                self._write_hud_state(player_total, dealer_total, is_soft, None, phase)
                 return False
 
             if dealer_total is None:
                 self.log("Could not detect dealer total")
+                self._write_hud_state(player_total, dealer_total, is_soft, None, phase)
                 return False
             if not totals_confirmed:
                 self.log("Totals not confirmed yet")
+                self._write_hud_state(player_total, dealer_total, is_soft, None, phase)
                 return False
             if self.waiting_for_total_update:
                 self.log("Still waiting for a confirmed total change after last action")
+                self._write_hud_state(player_total, dealer_total, is_soft, None, phase)
                 return False
 
             required = getattr(config, "REQUIRE_BUTTONS_FOR_ACTION", ("hit", "stand"))
@@ -595,10 +621,12 @@ class BlackjackBot:
             action = self.get_strategy_action(
                 player_total, dealer_total, can_double, can_split, is_soft
             )
+            self.last_decision = action
 
             hand_type = "Soft" if is_soft else "Hard"
             print(f"\nPlayer: {hand_type} {player_total} vs Dealer: {dealer_total}")
             print(f"  Strategy: {action.upper()}")
+            self._write_hud_state(player_total, dealer_total, is_soft, action, phase)
 
             prev_state = {
                 'phase': phase,
@@ -612,6 +640,7 @@ class BlackjackBot:
                 self.pending_player_total = player_total
                 self.pending_player_soft = is_soft
                 self.waiting_for_total_update = True
+                self._write_hud_state(player_total, dealer_total, is_soft, action, phase)
                 return True
 
         return False
@@ -631,6 +660,7 @@ class BlackjackBot:
 
         # Register hotkey
         keyboard.add_hotkey('ctrl+alt+j', _request_stop)
+        keyboard.add_hotkey('ctrl+alt+p', _toggle_pause)
 
         self.running = True
 
@@ -665,6 +695,26 @@ class BlackjackBot:
                 except Exception:
                     pass
             print(f"\nSession complete. Hands played: {self.hands_played}")
+
+    def _write_hud_state(self, player_total, dealer_total, is_soft, action, phase):
+        """Write lightweight HUD state if enabled (GUI overlay reads this)."""
+        if not self.hud_enabled or not self.hud_path:
+            return
+        try:
+            payload = {
+                "phase": phase,
+                "player_total": player_total,
+                "is_soft": bool(is_soft),
+                "dealer_total": dealer_total,
+                "action": action if action else self.last_decision,
+                "ts": time.time(),
+            }
+            temp_path = f"{self.hud_path}.tmp"
+            with open(temp_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f)
+            os.replace(temp_path, self.hud_path)
+        except Exception:
+            return
 
 
 def main():

@@ -1,14 +1,20 @@
 """Simple GUI launcher for GOP3 Blackjack bot tools (Windows)."""
 
 import ctypes
+from ctypes import wintypes
+import json
 import os
 import re
 import subprocess
 import sys
+import tempfile
+import threading
+import time
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk
 import importlib.util
+import keyboard
 
 from config_loader import get_external_config_path, load_config
 
@@ -101,6 +107,34 @@ class App(tk.Tk):
         self.disable_focus = tk.BooleanVar(value=False)
 
         self._build_ui()
+        self.overlay = None
+        self.overlay_path = None
+        self._start_thread = None
+        self._start_event = None
+        self._cancel_event = None
+
+    def _bind_start_keys(self):
+        try:
+            self.unbind_all("<F9>")
+            self.unbind_all("<Escape>")
+        except Exception:
+            pass
+        self._start_event = threading.Event()
+        self._cancel_event = threading.Event()
+        try:
+            self.bind_all("<F9>", lambda _evt: self._start_event.set())
+            self.bind_all("<Escape>", lambda _evt: self._cancel_event.set())
+        except Exception:
+            pass
+
+    def _unbind_start_keys(self):
+        try:
+            self.unbind_all("<F9>")
+            self.unbind_all("<Escape>")
+        except Exception:
+            pass
+        self._start_event = None
+        self._cancel_event = None
 
     def _build_ui(self):
         pad = {"padx": 10, "pady": 6}
@@ -154,6 +188,110 @@ class App(tk.Tk):
         else:
             self.status.set("Failed to write config.")
 
+    def _focus_game_window(self) -> bool:
+        if sys.platform != "win32":
+            return False
+        title = self.config_title.get()
+        if not title:
+            return False
+
+        user32 = ctypes.windll.user32
+
+        matches = []
+
+        @ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+        def enum_proc(hwnd, lparam):
+            buf = ctypes.create_unicode_buffer(256)
+            length = user32.GetWindowTextW(hwnd, buf, 255)
+            if length == 0:
+                return True
+            window_title = buf.value
+            if title.lower() in window_title.lower():
+                matches.append(hwnd)
+                return False
+            return True
+
+        user32.EnumWindows(enum_proc, 0)
+        if not matches:
+            return False
+
+        hwnd = matches[0]
+        user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+        user32.SetForegroundWindow(hwnd)
+        return True
+
+    def _scale_point(self, point):
+        try:
+            import pyautogui  # type: ignore
+        except Exception:
+            return point
+        if not point:
+            return point
+        current_w, current_h = pyautogui.size()
+        cfg = load_config()
+        base_w = getattr(cfg, "SCREEN_WIDTH", current_w) or current_w
+        base_h = getattr(cfg, "SCREEN_HEIGHT", current_h) or current_h
+        sx = current_w / float(base_w)
+        sy = current_h / float(base_h)
+        if abs(sx - 1.0) < 0.01 and abs(sy - 1.0) < 0.01:
+            return point
+        return (int(round(point[0] * sx)), int(round(point[1] * sy)))
+
+    def _region_center(self, region_name: str):
+        try:
+            cfg = load_config()
+        except Exception:
+            return None
+        region = getattr(cfg, region_name, None)
+        if not region:
+            return None
+        try:
+            import pyautogui  # type: ignore
+        except Exception:
+            return None
+        w, h = pyautogui.size()
+        cx = int((region["x_percent"][0] + region["x_percent"][1]) / 2.0 * w)
+        cy = int((region["y_percent"][0] + region["y_percent"][1]) / 2.0 * h)
+        return (cx, cy)
+
+    def _preflight_preview(self):
+        try:
+            import pyautogui  # type: ignore
+        except Exception:
+            self.status.set("Preflight skipped: pyautogui unavailable.")
+            return
+
+        # If not Windows, warn and skip focus/overlay but still preview
+        positions = getattr(load_config(), "BUTTON_POSITIONS", {}) or {}
+        seq = ["hit", "stand", "double", "split"]
+        points = []
+        for name in seq:
+            if name in positions:
+                points.append(self._scale_point(positions[name]))
+
+        player_center = self._region_center("PLAYER_TOTAL_REGION")
+        dealer_center = self._region_center("DEALER_TOTAL_REGION")
+        for pt in (player_center, dealer_center):
+            if pt:
+                points.append(pt)
+
+        if not points:
+            self.status.set("Preflight skipped: no positions available.")
+            return
+
+        for pt in points:
+            pyautogui.moveTo(pt[0], pt[1], duration=0.35)
+            time.sleep(0.05)
+        # Move to center after preview
+        try:
+            w, h = pyautogui.size()
+            pyautogui.moveTo(w // 2, h // 2, duration=0.2)
+        except Exception:
+            pass
+
+    def _can_show_overlay(self) -> bool:
+        return sys.platform == "win32"
+
     def _run_bot(self):
         self._spawn_bot([])
 
@@ -192,12 +330,67 @@ class App(tk.Tk):
 
     def _spawn_bot(self, args):
         try:
-            if getattr(sys, "frozen", False):
-                cmd = [sys.executable, "--bot"] + args
+            env = os.environ.copy()
+            hud_path = Path(tempfile.gettempdir()) / "gop3_hud_state.json"
+            env["GOP3_HUD_STATE"] = "1"
+            env["GOP3_HUD_PATH"] = str(hud_path)
+            self.overlay_path = hud_path
+
+            if self._focus_game_window():
+                self.status.set("Brought game window to front.")
             else:
-                cmd = [sys.executable, str(Path(__file__).resolve()), "--bot"] + args
-            subprocess.Popen(cmd, cwd=str(ROOT))
-            self.status.set("Launched: " + " ".join(cmd))
+                self.status.set("Could not focus game window (continuing).")
+
+            self._preflight_preview()
+            self._bind_start_keys()
+            self.status.set("Press F9 to start bot (Esc to cancel). If hotkeys fail, click this window and press F9.")
+
+            def wait_keys():
+                while True:
+                    try:
+                        if keyboard.is_pressed("f9"):
+                            break
+                    except Exception:
+                        pass
+                    if self._start_event and self._start_event.is_set():
+                        break
+                    try:
+                        if keyboard.is_pressed("esc"):
+                            self.after(0, lambda: self.status.set("Start canceled (Esc)."))
+                            self.after(0, self._unbind_start_keys)
+                            return
+                    except Exception:
+                        pass
+                    if self._cancel_event and self._cancel_event.is_set():
+                        self.after(0, lambda: self.status.set("Start canceled (Esc)."))
+                        self.after(0, self._unbind_start_keys)
+                        return
+                    time.sleep(0.05)
+
+                # Launch bot after F9
+                self.after(0, self._unbind_start_keys)
+                if getattr(sys, "frozen", False):
+                    cmd = [sys.executable, "--bot"] + args
+                else:
+                    cmd = [sys.executable, str(Path(__file__).resolve()), "--bot"] + args
+                subprocess.Popen(cmd, cwd=str(ROOT), env=env)
+
+                if self._can_show_overlay():
+                    if self.overlay:
+                        try:
+                            self.overlay.destroy()
+                        except Exception:
+                            pass
+                    self.overlay = HUDOverlay(self, hud_path=hud_path, window_title=self.config_title.get())
+                self.after(0, lambda: self.status.set("Launched: " + " ".join(cmd)))
+
+            if self._start_thread and self._start_thread.is_alive():
+                try:
+                    self._start_thread.join(timeout=0)
+                except Exception:
+                    pass
+            self._start_thread = threading.Thread(target=wait_keys, daemon=True)
+            self._start_thread.start()
         except Exception as exc:
             self.status.set(f"Failed to launch: {exc}")
 
@@ -349,6 +542,117 @@ class DebugWindow(tk.Toplevel):
             self.status.set("Dealer read complete.")
         except Exception as exc:
             self.status.set(f"Dealer read failed: {exc}")
+
+
+class HUDOverlay(tk.Toplevel):
+    """Small topmost header showing phase/totals/decision while bot runs."""
+
+    def __init__(self, parent, *, hud_path: Path, window_title: str):
+        super().__init__(parent)
+        self.hud_path = Path(hud_path)
+        self.window_title = window_title
+        self.withdraw()
+        self.overrideredirect(True)
+        self.attributes("-topmost", True)
+        self.configure(bg="#111111")
+
+        self.phase_var = tk.StringVar(value="phase: --")
+        self.totals_var = tk.StringVar(value="P: --  D: --")
+        self.action_var = tk.StringVar(value="action: --")
+        self.last_state = None
+        self.warned_stale = False
+
+        pad = {"padx": 10, "pady": 4}
+        row = ttk.Frame(self, padding="6 2 6 2")
+        row.pack(fill="x")
+        ttk.Label(row, textvariable=self.phase_var, width=16).pack(side="left")
+        ttk.Label(row, textvariable=self.totals_var, width=22, anchor="center").pack(side="left", expand=True)
+        ttk.Label(row, textvariable=self.action_var, width=20, anchor="e").pack(side="right")
+
+        self.after(200, self._tick)
+
+    def _game_rect(self):
+        if sys.platform != "win32":
+            return None
+        if not self.window_title:
+            return None
+        user32 = ctypes.windll.user32
+        matches = []
+
+        @ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+        def enum_proc(hwnd, lparam):
+            buf = ctypes.create_unicode_buffer(256)
+            length = user32.GetWindowTextW(hwnd, buf, 255)
+            if length == 0:
+                return True
+            window_title = buf.value
+            if self.window_title.lower() in window_title.lower():
+                matches.append(hwnd)
+                return False
+            return True
+
+        user32.EnumWindows(enum_proc, 0)
+        if not matches:
+            return None
+        rect = ctypes.wintypes.RECT()
+        user32.GetWindowRect(matches[0], ctypes.byref(rect))
+        return (rect.left, rect.top, rect.right, rect.bottom)
+
+    def _read_state(self):
+        try:
+            if not self.hud_path.exists():
+                return None
+            text = self.hud_path.read_text(encoding="utf-8")
+            data = json.loads(text)
+            self.last_state = data
+            return data
+        except Exception:
+            return self.last_state
+
+    def _tick(self):
+        state = self._read_state()
+        if state:
+            phase = state.get("phase") or "--"
+            pt = state.get("player_total")
+            dt = state.get("dealer_total")
+            soft = state.get("is_soft")
+            action = state.get("action") or "--"
+            ptxt = "--" if pt is None else f"{'S' if soft else 'H'}{pt}"
+            dtxt = "--" if dt is None else str(dt)
+            self.phase_var.set(f"phase: {phase}")
+            self.totals_var.set(f"P: {ptxt}  D: {dtxt}")
+            self.action_var.set(f"action: {action.upper() if isinstance(action, str) else action}")
+
+        rect = self._game_rect()
+        if rect:
+            x1, y1, x2, _ = rect
+            width = max(360, min(520, x2 - x1))
+            height = 28
+            self.geometry(f"{width}x{height}+{x1}+{max(0, y1 - height)}")
+            self.deiconify()
+            if sys.platform == "win32":
+                try:
+                    hwnd = ctypes.windll.user32.GetParent(self.winfo_id())
+                    # WS_EX_LAYERED (0x80000) | WS_EX_TRANSPARENT (0x20)
+                    style = ctypes.windll.user32.GetWindowLongW(hwnd, -20)
+                    ctypes.windll.user32.SetWindowLongW(hwnd, -20, style | 0x80000 | 0x20)
+                    ctypes.windll.user32.SetLayeredWindowAttributes(hwnd, 0, 255, 0x2)
+                except Exception:
+                    if not getattr(self, "_warned_clickthrough", False):
+                        print("[WARN] HUD overlay click-through not available; overlay stays topmost.")
+                        self._warned_clickthrough = True
+        else:
+            # If no window found, keep hidden but retry.
+            self.withdraw()
+        # Stale warning if data older than 2s
+        if self.last_state and not self.warned_stale:
+            ts = self.last_state.get("ts")
+            if ts and (time.time() - ts) > 2.0:
+                self.status_var = getattr(self, "status_var", None)
+                print("[WARN] HUD overlay: state stale (>2s).")
+                self.warned_stale = True
+
+        self.after(300, self._tick)
 
 
 def run_bot_mode(args):

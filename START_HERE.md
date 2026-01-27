@@ -74,6 +74,8 @@ Expected:
 ## 5) Run The Bot
 From the GUI:
 - Click **Run bot (test)** for a single iteration, or **Run bot** for the loop.
+- On Windows, the GUI will try to bring the GOP3 window to front, run a quick preflight preview (moves cursor over buttons + total regions without clicking), then launch a small header overlay showing phase/totals/last decision while the bot runs.
+- After the preview, the GUI waits for **F9 to start** (or **Esc to cancel**). If F9/Esc don’t respond, click the GUI window and press F9. While running, **Ctrl+Alt+P** pauses/resumes (no clicks while paused); **Ctrl+Alt+J** still stops the bot.
 
 Important window focus rule:
 - After starting the bot, **bring the game window to the foreground**.
