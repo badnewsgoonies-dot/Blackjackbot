@@ -47,6 +47,7 @@ What the code does:
 ## 3) Calibrate Coordinates (Buttons + Regions)
 In the GUI:
 - Click **Run calibration**
+- Optional: click **Test anchors** to verify auto-calibration (no clicks).
 
 In the calibration console:
 1) For each prompt, move your mouse to the **center** of the requested UI element.

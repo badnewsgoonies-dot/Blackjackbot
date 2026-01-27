@@ -181,6 +181,7 @@ class App(tk.Tk):
         ttk.Button(row4, text="Run bot", command=self._run_bot).pack(side="left", padx=6)
         ttk.Button(row4, text="Run calibration", command=self._run_calibration).pack(side="left", padx=6)
         ttk.Button(row4, text="Open debugger", command=self._open_debugger).pack(side="left", padx=6)
+        ttk.Button(row4, text="Test anchors", command=self._test_anchors).pack(side="left", padx=6)
 
         self.status = tk.StringVar(value="")
         ttk.Label(self, textvariable=self.status, foreground="#444").pack(fill="x", **pad)
@@ -433,6 +434,36 @@ class App(tk.Tk):
             DebugWindow(self, config_path=CONFIG_PATH)
         except Exception as exc:
             self.status.set(f"Failed to open debugger: {exc}")
+
+    def _test_anchors(self):
+        try:
+            screen = self._capture_screen_bgr()
+            if screen is None:
+                self.status.set("Anchor test failed: screenshot unavailable.")
+                return
+            transform = self.auto_cal.calibrate(screen)
+            if not transform:
+                self.status.set("Anchor test failed: no matches (fallback mode).")
+                return
+            anchors = ", ".join(a.name for a in transform.anchors)
+            # Light visual check on current frame
+            try:
+                from screen_capture import GOP3Detector
+                detector = GOP3Detector(load_config())
+                detector.auto_cal = self.auto_cal
+                state = detector.detect_game_state(screen)
+                buttons = state.get("buttons", {}) or {}
+                required = getattr(load_config(), "REQUIRE_BUTTONS_FOR_ACTION", ("hit", "stand"))
+                missing = [b for b in required if b and b not in buttons]
+                visual_ok = state.get("player_total") is not None and state.get("dealer_total") is not None and not missing
+                visual_text = "ok" if visual_ok else "unstable"
+            except Exception:
+                visual_text = "unknown"
+            self.status.set(
+                f"Anchor test OK (scale={transform.scale:.3f}, anchors={anchors}) | visual: {visual_text}"
+            )
+        except Exception as exc:
+            self.status.set(f"Anchor test failed: {exc}")
 
 
 class DebugWindow(tk.Toplevel):

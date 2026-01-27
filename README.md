@@ -40,6 +40,12 @@ python test_detection.py
 
 This tests detection on the reference image folder. If `timing_frames/` exists it will use that; otherwise it falls back to `Calibration Images/`.
 
+Anchor sanity test:
+
+```bash
+python test_anchors.py --dir timing_frames --limit 30
+```
+
 ## Usage
 
 ### Run the Bot
@@ -120,6 +126,7 @@ The bot follows standard basic strategy ("the book"):
 - The bot is calibrated for 2560x1440 and uses anchor-based auto-calibration to align clicks/ROIs. If anchors fail to match (theme or layout changes), it falls back to basic scaling. Re-run calibration or update `BUTTON_POSITIONS` / `*_REGION` for best accuracy.
 - Template mode now uses `timing_frames/` as its source when building digit templates (`TEMPLATE_TOTALS_PATH`).
 - HUD overlay shows `cal:` status and `vis:` status (visual stability gate) while the bot runs.
+- GUI includes a **Test anchors** button that runs a no-click anchor + visual check on the current screen.
 
 ### Platform notes
 - Focus checks use Win32 APIs; on macOS/Linux, set `GAME_WINDOW_TITLE = None` to avoid clicks being blocked by the foreground-title check.

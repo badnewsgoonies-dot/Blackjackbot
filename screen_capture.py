@@ -84,7 +84,10 @@ class GOP3Detector:
         self.button_scale_warned = False
         self.window_region_warned = False
         self.template_ready = False
-        self.auto_cal = AutoCalibrator(enabled=getattr(config, "AUTO_CALIBRATION_ENABLED", True))
+        self.auto_cal = AutoCalibrator(
+            enabled=getattr(config, "AUTO_CALIBRATION_ENABLED", True),
+            threshold=getattr(config, "AUTO_CALIBRATION_THRESHOLD", 0.75),
+        )
         self._auto_cal_state = None
         if self.tesseract_available:
             try:

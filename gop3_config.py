@@ -28,6 +28,7 @@ USE_FIXED_BUTTONS = True
 
 # Anchor-based auto-calibration (uses timing_frames anchors)
 AUTO_CALIBRATION_ENABLED = True
+AUTO_CALIBRATION_THRESHOLD = 0.75
 
 # Click jitter settings for button presses
 BUTTON_JITTER_X = 6  # +/- pixels from the configured X
