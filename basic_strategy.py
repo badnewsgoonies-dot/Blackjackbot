@@ -4,17 +4,50 @@ Based on standard basic strategy chart with DAS (Double After Split) allowed.
 H = Hit, S = Stand, D = Double (hit if not allowed), Ds = Double (stand if not allowed), P = Split
 """
 
+import hashlib
 import json
 from pathlib import Path
 
 
+CHART_PATH = Path(__file__).with_name("strategy_chart.json")
+ACTIVE_RULESET = None
+CHART_HASH = None
+CHART_META = {}
+_CHART_MTIME = None
+_CHART_WARNED = False
+
+
+def _hash_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def _load_strategy():
-    path = Path(__file__).with_name("strategy_chart.json")
-    data = json.loads(path.read_text(encoding="utf-8"))
+    data_text = CHART_PATH.read_text(encoding="utf-8")
+    data = json.loads(data_text)
+
+    global ACTIVE_RULESET, CHART_HASH, CHART_META, _CHART_MTIME
+    CHART_HASH = _hash_text(data_text)
+    try:
+        _CHART_MTIME = CHART_PATH.stat().st_mtime
+    except Exception:
+        _CHART_MTIME = None
+
+    table_source = data
+    if "variants" in data:
+        variants = data.get("variants") or {}
+        active = (data.get("meta") or {}).get("active_ruleset")
+        if active not in variants:
+            active = sorted(variants.keys())[0] if variants else None
+        ACTIVE_RULESET = active or "default"
+        table_source = variants.get(active, {}) if active else {}
+        CHART_META = table_source.get("meta", {}) if isinstance(table_source, dict) else {}
+    else:
+        ACTIVE_RULESET = (data.get("meta") or {}).get("active_ruleset") or (data.get("meta") or {}).get("ruleset") or "default"
+        CHART_META = (data.get("meta") or {})
 
     def _to_table(section: str):
         table = {}
-        for k, v in data[section].items():
+        for k, v in table_source[section].items():
             pk = int(k)
             table[pk] = {int(dk): dv for dk, dv in v.items()}
         return table
@@ -23,6 +56,39 @@ def _load_strategy():
 
 
 HARD_STRATEGY, SOFT_STRATEGY, PAIR_STRATEGY = _load_strategy()
+
+
+def check_chart_integrity():
+    """Warn once if the strategy chart changes during runtime."""
+    global _CHART_MTIME, CHART_HASH, _CHART_WARNED
+    try:
+        mtime = CHART_PATH.stat().st_mtime
+    except Exception:
+        return False
+    if _CHART_MTIME is None:
+        _CHART_MTIME = mtime
+        return False
+    if mtime <= _CHART_MTIME:
+        return False
+    try:
+        data_text = CHART_PATH.read_text(encoding="utf-8")
+    except Exception:
+        return False
+    new_hash = _hash_text(data_text)
+    _CHART_MTIME = mtime
+    if new_hash != CHART_HASH and not _CHART_WARNED:
+        print("[WARN] strategy_chart.json changed during runtime; restart to apply updates.")
+        _CHART_WARNED = True
+    CHART_HASH = new_hash
+    return True
+
+
+def get_chart_info() -> dict:
+    return {
+        "active_ruleset": ACTIVE_RULESET,
+        "chart_hash": CHART_HASH,
+        "chart_meta": CHART_META,
+    }
 
 
 def get_card_value(card: str) -> int:

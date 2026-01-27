@@ -1,6 +1,6 @@
 import unittest
 
-from basic_strategy import get_action
+from basic_strategy import get_action, get_chart_info
 
 
 class StrategyChartTests(unittest.TestCase):
@@ -29,6 +29,12 @@ class StrategyChartTests(unittest.TestCase):
         self.assertAction(['4', '4'], '5', 'split')        # 4s vs 5 -> P
         self.assertAction(['5', '5'], '10', 'hit')         # 5s vs 10 -> H
         self.assertAction(['8', '8'], '10', 'hit', can_split=False)  # Split disabled -> falls to hard 16 -> H
+
+    def test_chart_metadata(self):
+        info = get_chart_info()
+        self.assertTrue(info.get("active_ruleset"))
+        chart_hash = info.get("chart_hash")
+        self.assertTrue(chart_hash and len(chart_hash) == 64)
 
 
 if __name__ == "__main__":

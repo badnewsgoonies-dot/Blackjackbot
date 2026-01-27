@@ -10,7 +10,7 @@ import time
 import keyboard
 
 from screen_capture import GOP3Detector, GameController
-from basic_strategy import HARD_STRATEGY, SOFT_STRATEGY, PAIR_STRATEGY
+from basic_strategy import HARD_STRATEGY, SOFT_STRATEGY, PAIR_STRATEGY, check_chart_integrity, get_chart_info
 from config_loader import load_config
 
 config = load_config()
@@ -98,6 +98,7 @@ class BlackjackBot:
         self.dealer_total_locked = False
         self.player_total_verified = False
         self.actions_in_round = 0
+        self._last_chart_check = 0.0
 
     def reset_round_cache(self):
         """Reset cached totals when a round ends."""
@@ -551,6 +552,11 @@ class BlackjackBot:
             self._write_hud_state(None, None, None, None, "betting")
             return False
 
+        now = time.time()
+        if now - self._last_chart_check >= 5.0:
+            check_chart_integrity()
+            self._last_chart_check = now
+
         self.log(f"State: {state}")
 
         phase = state['phase']
@@ -701,12 +707,15 @@ class BlackjackBot:
         if not self.hud_enabled or not self.hud_path:
             return
         try:
+            chart_info = get_chart_info()
             payload = {
                 "phase": phase,
                 "player_total": player_total,
                 "is_soft": bool(is_soft),
                 "dealer_total": dealer_total,
                 "action": action if action else self.last_decision,
+                "ruleset": chart_info.get("active_ruleset"),
+                "chart_hash": chart_info.get("chart_hash"),
                 "ts": time.time(),
             }
             temp_path = f"{self.hud_path}.tmp"

@@ -124,7 +124,9 @@ The bot follows standard basic strategy ("the book"):
 
 ## Strategy Chart
 - Edit `strategy_chart.json` to tweak basic strategy (values: `H`, `S`, `D`, `Ds`, `P`; keys are strings of totals/upcards).
-- `basic_strategy.py` loads this chart at import; keep the schema intact (meta + hard/soft/pair sections).
+- Set `meta.active_ruleset` to choose which variant is loaded (e.g., `DAS_S17`, `DAS_H17`, `noDAS_S17`, `noDAS_H17`).
+- By default only `DAS_S17` is validated; other variants are placeholders until you update their tables.
+- `basic_strategy.py` loads the active variant at import; keep the schema intact (meta + variants).
 - Validate changes with:
 
 ```bash

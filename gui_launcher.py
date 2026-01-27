@@ -567,7 +567,7 @@ class HUDOverlay(tk.Toplevel):
         row.pack(fill="x")
         ttk.Label(row, textvariable=self.phase_var, width=16).pack(side="left")
         ttk.Label(row, textvariable=self.totals_var, width=22, anchor="center").pack(side="left", expand=True)
-        ttk.Label(row, textvariable=self.action_var, width=20, anchor="e").pack(side="right")
+        ttk.Label(row, textvariable=self.action_var, width=28, anchor="e").pack(side="right")
 
         self.after(200, self._tick)
 
@@ -617,16 +617,18 @@ class HUDOverlay(tk.Toplevel):
             dt = state.get("dealer_total")
             soft = state.get("is_soft")
             action = state.get("action") or "--"
+            ruleset = state.get("ruleset") or "--"
             ptxt = "--" if pt is None else f"{'S' if soft else 'H'}{pt}"
             dtxt = "--" if dt is None else str(dt)
             self.phase_var.set(f"phase: {phase}")
             self.totals_var.set(f"P: {ptxt}  D: {dtxt}")
-            self.action_var.set(f"action: {action.upper() if isinstance(action, str) else action}")
+            action_text = action.upper() if isinstance(action, str) else action
+            self.action_var.set(f"{ruleset} | {action_text}")
 
         rect = self._game_rect()
         if rect:
             x1, y1, x2, _ = rect
-            width = max(360, min(520, x2 - x1))
+            width = max(420, min(620, x2 - x1))
             height = 28
             self.geometry(f"{width}x{height}+{x1}+{max(0, y1 - height)}")
             self.deiconify()
