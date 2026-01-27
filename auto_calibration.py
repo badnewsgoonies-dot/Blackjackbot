@@ -88,19 +88,22 @@ class AutoCalibrator:
             anchors.append(entry)
         return anchors
 
-    def _match_anchor(self, screen, anchor: Dict[str, object], scales: List[float]) -> Optional[AnchorMatch]:
+    def _match_anchor(self, screen, anchor: Dict[str, object], scales: List[float], *, full_search: bool = False) -> Optional[AnchorMatch]:
         if cv2 is None:
             return None
         tmpl = anchor.get("template")
         if tmpl is None:
             return None
         h, w = screen.shape[:2]
-        rx1 = int(w * anchor["x_percent"][0])
-        rx2 = int(w * anchor["x_percent"][1])
-        ry1 = int(h * anchor["y_percent"][0])
-        ry2 = int(h * anchor["y_percent"][1])
-        if rx2 <= rx1 or ry2 <= ry1:
-            return None
+        if full_search:
+            rx1, ry1, rx2, ry2 = 0, 0, w, h
+        else:
+            rx1 = int(w * anchor["x_percent"][0])
+            rx2 = int(w * anchor["x_percent"][1])
+            ry1 = int(h * anchor["y_percent"][0])
+            ry2 = int(h * anchor["y_percent"][1])
+            if rx2 <= rx1 or ry2 <= ry1:
+                return None
         roi = screen[ry1:ry2, rx1:rx2]
         if roi.size == 0:
             return None
@@ -160,6 +163,13 @@ class AutoCalibrator:
                 matches.append(match)
 
         if not matches:
+            # Retry once with a wider search window.
+            for anchor in self.anchors:
+                match = self._match_anchor(screen, anchor, scales, full_search=True)
+                if match:
+                    matches.append(match)
+
+        if not matches:
             self.status = "no_match"
             return None
 
@@ -173,6 +183,14 @@ class AutoCalibrator:
         if scale < 0.5 or scale > 2.5:
             self.status = "bad_scale"
             return None
+
+        # Sanity check: transformed anchor points must be on-screen.
+        for m in matches:
+            tx = int(round(m.ref_x * scale + offset_x))
+            ty = int(round(m.ref_y * scale + offset_y))
+            if tx < 0 or tx >= w or ty < 0 or ty >= h:
+                self.status = "bad_transform"
+                return None
 
         self.transform = Transform(scale=scale, offset_x=offset_x, offset_y=offset_y, anchors=matches)
         self.status = "ok"
@@ -205,8 +223,12 @@ class AutoCalibrator:
             y1 = int(h * region_cfg["y_percent"][0])
             y2 = int(h * region_cfg["y_percent"][1])
 
+        min_w = max(10, int(w * 0.02))
+        min_h = max(10, int(h * 0.02))
         x1 = max(0, min(w - 1, x1))
         x2 = max(1, min(w, x2))
         y1 = max(0, min(h - 1, y1))
         y2 = max(1, min(h, y2))
+        if (x2 - x1) < min_w or (y2 - y1) < min_h:
+            return 0, 0, 0, 0
         return x1, y1, x2, y2

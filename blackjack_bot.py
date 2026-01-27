@@ -99,6 +99,7 @@ class BlackjackBot:
         self.player_total_verified = False
         self.actions_in_round = 0
         self._last_chart_check = 0.0
+        self.visual_ok = False
 
     def reset_round_cache(self):
         """Reset cached totals when a round ends."""
@@ -557,6 +558,10 @@ class BlackjackBot:
         dealer_total = state.get('dealer_total')
         totals_confirmed = state.get('totals_confirmed', False)
         totals_changed = state.get('totals_changed', False)
+        required = getattr(config, "REQUIRE_BUTTONS_FOR_ACTION", ("hit", "stand"))
+        missing = [b for b in required if b and b not in buttons]
+        visual_ok = bool(totals_confirmed) and not missing and player_total is not None and dealer_total is not None
+        self.visual_ok = visual_ok
         self._write_hud_state(player_total, dealer_total, is_soft, None, phase)
 
         if _paused:
@@ -605,8 +610,6 @@ class BlackjackBot:
                 self._write_hud_state(player_total, dealer_total, is_soft, None, phase)
                 return False
 
-            required = getattr(config, "REQUIRE_BUTTONS_FOR_ACTION", ("hit", "stand"))
-            missing = [b for b in required if b and b not in buttons]
             if missing:
                 self.log(f"Required buttons missing {missing}; refusing to act")
                 return False
@@ -715,6 +718,7 @@ class BlackjackBot:
                 "ruleset": chart_info.get("active_ruleset"),
                 "chart_hash": chart_info.get("chart_hash"),
                 "auto_cal": auto_cal,
+                "visual_ok": bool(self.visual_ok),
                 "ts": time.time(),
             }
             temp_path = f"{self.hud_path}.tmp"

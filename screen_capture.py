@@ -120,7 +120,10 @@ class GOP3Detector:
         if not region_cfg:
             return None
         if self.auto_cal.transform:
-            return self.auto_cal.region_rect(region_cfg, screen.shape)
+            rect = self.auto_cal.region_rect(region_cfg, screen.shape)
+            if rect == (0, 0, 0, 0):
+                return None
+            return rect
         h, w = screen.shape[:2]
         x1 = int(w * region_cfg["x_percent"][0])
         x2 = int(w * region_cfg["x_percent"][1])
