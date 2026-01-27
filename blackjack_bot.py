@@ -191,10 +191,15 @@ class BlackjackBot:
         required = tuple(getattr(config, "REQUIRE_BUTTONS_FOR_ACTION", ("hit", "stand")))
         has_required_buttons = all(b in buttons for b in required) if required else bool(buttons)
 
-        if total is not None:
-            state['phase'] = 'player_turn' if has_required_buttons else 'dealer_turn'
+        if has_required_buttons:
+            state['phase'] = 'player_turn'
+        elif total is not None:
+            state['phase'] = 'dealer_turn'
         else:
-            state['phase'] = 'betting' if state.get('betting_ui', False) else 'waiting'
+            if state.get('dealer_total') is not None and not state.get('bet_button_visible', False):
+                state['phase'] = 'waiting'
+            else:
+                state['phase'] = 'betting' if state.get('betting_ui', False) else 'waiting'
 
         if diag and getattr(diag, "enabled", False):
             try:
@@ -208,6 +213,11 @@ class BlackjackBot:
         max_wait = getattr(config, 'TOTAL_READ_MAX_WAIT', 2.5)
         stable_needed = getattr(config, 'TOTAL_READ_STABLE_COUNT', 2)
         interval = getattr(config, 'TOTAL_READ_INTERVAL', 0.15)
+
+        if require_player_total_change:
+            max_wait = getattr(config, 'TOTAL_READ_MAX_WAIT_AFTER_ACTION', max_wait)
+            stable_needed = getattr(config, 'TOTAL_READ_STABLE_COUNT_AFTER_ACTION', stable_needed)
+            interval = getattr(config, 'TOTAL_READ_INTERVAL_AFTER_ACTION', interval)
 
         start = time.time()
         stable = 0

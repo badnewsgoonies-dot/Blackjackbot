@@ -21,14 +21,14 @@ SCREEN_HEIGHT = 1800
 # These are the exact center positions of each button
 # Adjusted +80 pixels right and -80 pixels up (diagonally up-right)
 BUTTON_POSITIONS = {
-    'hit': (1290, 1553),
-    'stand': (1619, 1545),
-    'double': (1843, 1545),
-    'split': (2155, 1554),
+    'hit': (1230, 1671),
+    'stand': (1618, 1674),
+    'double': (1959, 1678),
+    'split': (2266, 1680),
 }
 
 # Bet button position (1K bet - leftmost bet button)
-BET_BUTTON_POSITION = (1270, 1530)
+BET_BUTTON_POSITION = (1231, 1661)
 
 # Use fixed positions instead of detection
 USE_FIXED_BUTTONS = True
@@ -63,28 +63,28 @@ BUTTON_MIN_HEIGHT = 30
 # Player total region (where the number like "12" or "10/20" appears)
 # Based on analysis: bottom center area
 PLAYER_TOTAL_REGION = {
-    'x_percent': (0.40, 0.60),
-    'y_percent': (0.34, 0.48),
+    'x_percent': (0.28, 0.72),
+    'y_percent': (0.48, 0.92),
 }
 
 # Dealer card region (where dealer's up card appears)
 # Based on analysis: top center area
 DEALER_CARD_REGION = {
-    'x_percent': (0.22, 0.38),
-    'y_percent': (0.31, 0.55),
+    'x_percent': (0.28, 0.72),
+    'y_percent': (0.06, 0.62),
 }
 
 # Dealer total region (blue circle indicator with one card face down)
 # Defaults to the same area as the dealer card region.
 DEALER_TOTAL_REGION = {
-    'x_percent': (0.22, 0.38),
-    'y_percent': (0.31, 0.55),
+    'x_percent': (0.28, 0.72),
+    'y_percent': (0.06, 0.62),
 }
 
 # Player card region (used for sanity-check OCR of card ranks)
 PLAYER_CARD_REGION = {
-    'x_percent': (0.43, 0.57),
-    'y_percent': (0.34, 0.47),
+    'x_percent': (0.28, 0.72),
+    'y_percent': (0.48, 0.92),
 }
 
 # Card rank detection
@@ -97,9 +97,9 @@ SCAN_INTERVAL = 0.1     # How often to scan the screen
 POST_CLICK_DELAY = 0.3  # Wait after clicking before next scan
 
 # Adaptive/event-driven scanning (recommended)
-BETTING_SCAN_INTERVAL = 0.8       # Slow poll while waiting to bet/deal
-WAITING_SCAN_INTERVAL = 0.8       # Slow poll while dealer plays / between hands
-PLAYER_TURN_SCAN_INTERVAL = 0.12  # Fast poll during player_turn (mostly cached reads)
+BETTING_SCAN_INTERVAL = 0.4       # Slow poll while waiting to bet/deal
+WAITING_SCAN_INTERVAL = 0.4       # Slow poll while dealer plays / between hands
+PLAYER_TURN_SCAN_INTERVAL = 0.06  # Fast poll during player_turn (mostly cached reads)
 
 # Action-specific post-click delays (animation settling)
 # Tuned from observed GOP3 timings (windowed, 100% DPI).
@@ -126,7 +126,7 @@ HUMAN_DELAY_MIN = 0.0   # Minimum delay before clicking (seconds)
 HUMAN_DELAY_MAX = 0.0   # Maximum delay before clicking (seconds)
 
 # Click verification (keep tight so turns stay within timing budget)
-CLICK_VERIFY_ENABLED = True
+CLICK_VERIFY_ENABLED = False
 CLICK_VERIFY_TIMEOUT = 0.8
 CLICK_VERIFY_INTERVAL = 0.08
 CLICK_VERIFY_STABLE_COUNT = 2
@@ -199,11 +199,11 @@ DEBUG_IMAGE_PATH = "debug_captures"
 
 # Blue circle total detection (HSV + geometry)
 # Tuned for both blue and green table backgrounds (circle is brighter, less saturated)
-BLUE_CIRCLE_HSV_LOWER = (45, 20, 170)
-BLUE_CIRCLE_HSV_UPPER = (130, 160, 255)
+BLUE_CIRCLE_HSV_LOWER = (30, 5, 120)
+BLUE_CIRCLE_HSV_UPPER = (150, 255, 255)
 BLUE_CIRCLE_MIN_AREA = 100
 BLUE_CIRCLE_MIN_SIZE = 20
-BLUE_CIRCLE_ASPECT_RANGE = (0.5, 2.5)  # Wider range for soft hands like "8/18"
+BLUE_CIRCLE_ASPECT_RANGE = (0.35, 3.8)
 OCR_SCALE = 3.0
 OCR_PSMS = (11, 6, 8, 10, 13)
 OCR_FAST_MODE = False
@@ -215,7 +215,7 @@ OCR_TEXT_MIN_PIXELS = 20
 CARD_OCR_PSM = 11
 CARD_OCR_MIN_CONF = 50
 ENABLE_CARD_SANITY_CHECK = True
-CARD_SANITY_STRICT = True
+CARD_SANITY_STRICT = False
 
 # Total read mode: "template" (fast) or "ocr"
 TOTAL_READ_MODE = "ocr"
@@ -238,9 +238,14 @@ TEMPLATE_MAX_COMPONENTS = 6
 TEMPLATE_FALLBACK_TO_OCR = True
 
 # Total read synchronization
-TOTAL_READ_MAX_WAIT = 0.8
-TOTAL_READ_STABLE_COUNT = 2
-TOTAL_READ_INTERVAL = 0.05
+TOTAL_READ_MAX_WAIT = 1.2
+TOTAL_READ_STABLE_COUNT = 1
+TOTAL_READ_INTERVAL = 0.06
+
+# Faster reads after actions (e.g., after HIT) while waiting for totals to change.
+TOTAL_READ_MAX_WAIT_AFTER_ACTION = 0.6
+TOTAL_READ_STABLE_COUNT_AFTER_ACTION = 1
+TOTAL_READ_INTERVAL_AFTER_ACTION = 0.03
 
 # Optional dealer up-card OCR (disable to speed up totals read)
 READ_DEALER_CARD = False

@@ -1383,8 +1383,12 @@ class GOP3Detector:
         # Phase classification:
         # - Only call it "betting" when betting UI is visible.
         # - Missing totals + no betting UI is usually dealing/dealer/result => "waiting".
-        if total is not None:
-            state['phase'] = 'player_turn' if has_required_buttons else 'dealer_turn'
+        if has_required_buttons:
+            state['phase'] = 'player_turn'
+            if total is not None and getattr(self.config, 'READ_DEALER_CARD', False):
+                state['dealer_card'] = self.detect_dealer_card(screen)
+        elif total is not None:
+            state['phase'] = 'dealer_turn'
             if getattr(self.config, 'READ_DEALER_CARD', False):
                 state['dealer_card'] = self.detect_dealer_card(screen)
         else:
