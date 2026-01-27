@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk
+import importlib.util
 
 from config_loader import get_external_config_path, load_config
 
@@ -34,6 +35,16 @@ def get_foreground_window_title() -> str:
     buf = ctypes.create_unicode_buffer(length + 1)
     user32.GetWindowTextW(hwnd, buf, length + 1)
     return buf.value
+
+
+def load_config_from_path(path: Path):
+    """Load a fresh config module from disk (avoids cached load_config())."""
+    spec = importlib.util.spec_from_file_location("gop3_config_live", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Could not load config spec: {path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def read_config_value() -> str:
@@ -144,6 +155,7 @@ class App(tk.Tk):
         ttk.Button(row4, text="Run bot (test)", command=self._run_test).pack(side="left")
         ttk.Button(row4, text="Run bot", command=self._run_bot).pack(side="left", padx=6)
         ttk.Button(row4, text="Run calibration", command=self._run_calibration).pack(side="left", padx=6)
+        ttk.Button(row4, text="Open debugger", command=self._open_debugger).pack(side="left", padx=6)
 
         self.status = tk.StringVar(value="")
         ttk.Label(self, textvariable=self.status, foreground="#444").pack(fill="x", **pad)
@@ -218,6 +230,136 @@ class App(tk.Tk):
             self.status.set("Launched: " + " ".join(cmd))
         except Exception as exc:
             self.status.set(f"Failed to launch: {exc}")
+
+    def _open_debugger(self):
+        try:
+            DebugWindow(self, config_path=CONFIG_PATH)
+        except Exception as exc:
+            self.status.set(f"Failed to open debugger: {exc}")
+
+
+class DebugWindow(tk.Toplevel):
+    def __init__(self, parent, *, config_path: Path):
+        super().__init__(parent)
+        self.title("Debugger")
+        self.resizable(False, False)
+
+        self.config_path = Path(config_path)
+        self.cfg = None
+        self.detector = None
+
+        # Lazy import: allows GUI to open even if pyautogui is missing/misconfigured.
+        try:
+            import pyautogui  # type: ignore
+        except Exception:
+            pyautogui = None  # type: ignore
+        self.pyautogui = pyautogui
+
+        self.player_out = tk.StringVar(value="player: (not read yet)")
+        self.dealer_out = tk.StringVar(value="dealer: (not read yet)")
+        self.status = tk.StringVar(value="")
+
+        self._build_ui()
+        self._reload_config()
+
+    def _build_ui(self):
+        pad = {"padx": 10, "pady": 6}
+
+        row0 = ttk.Frame(self)
+        row0.pack(fill="x", **pad)
+        ttk.Label(row0, text=f"Config: {self.config_path}").pack(side="left")
+        ttk.Button(row0, text="Reload config", command=self._reload_config).pack(side="right")
+
+        # Mouse test controls
+        box1 = ttk.LabelFrame(self, text="Mouse / Button Position Test")
+        box1.pack(fill="x", **pad)
+
+        self.click_after_move = tk.BooleanVar(value=False)
+        ttk.Checkbutton(box1, text="Click after move", variable=self.click_after_move).grid(row=0, column=0, columnspan=3, sticky="w", padx=8, pady=4)
+
+        ttk.Button(box1, text="Bet", command=lambda: self._move_to("bet")).grid(row=1, column=0, padx=6, pady=4)
+        ttk.Button(box1, text="Hit", command=lambda: self._move_to("hit")).grid(row=1, column=1, padx=6, pady=4)
+        ttk.Button(box1, text="Stand", command=lambda: self._move_to("stand")).grid(row=1, column=2, padx=6, pady=4)
+        ttk.Button(box1, text="Double", command=lambda: self._move_to("double")).grid(row=2, column=0, padx=6, pady=4)
+        ttk.Button(box1, text="Split", command=lambda: self._move_to("split")).grid(row=2, column=1, padx=6, pady=4)
+
+        # Readouts
+        box2 = ttk.LabelFrame(self, text="Live Read (From Screen)")
+        box2.pack(fill="x", **pad)
+
+        ttk.Button(box2, text="Read player total", command=self._read_player).grid(row=0, column=0, padx=6, pady=4, sticky="w")
+        ttk.Label(box2, textvariable=self.player_out, width=40).grid(row=0, column=1, padx=6, pady=4, sticky="w")
+
+        ttk.Button(box2, text="Read dealer total", command=self._read_dealer).grid(row=1, column=0, padx=6, pady=4, sticky="w")
+        ttk.Label(box2, textvariable=self.dealer_out, width=40).grid(row=1, column=1, padx=6, pady=4, sticky="w")
+
+        ttk.Label(self, textvariable=self.status, foreground="#444").pack(fill="x", **pad)
+
+    def _reload_config(self):
+        try:
+            if not self.config_path.exists():
+                raise FileNotFoundError(str(self.config_path))
+            self.cfg = load_config_from_path(self.config_path)
+            from screen_capture import GOP3Detector
+            self.detector = GOP3Detector(self.cfg)
+            self.status.set("Config reloaded.")
+        except Exception as exc:
+            self.cfg = None
+            self.detector = None
+            self.status.set(f"Reload failed: {exc}")
+
+    def _pos_for(self, name: str):
+        if not self.cfg:
+            return None
+        if name == "bet":
+            return getattr(self.cfg, "BET_BUTTON_POSITION", None)
+        positions = getattr(self.cfg, "BUTTON_POSITIONS", {}) or {}
+        return positions.get(name)
+
+    def _move_to(self, name: str):
+        if self.pyautogui is None:
+            self.status.set("pyautogui not available; cannot move/click.")
+            return
+        pos = self._pos_for(name)
+        if not pos:
+            self.status.set(f"No configured position for '{name}'.")
+            return
+        x, y = int(pos[0]), int(pos[1])
+        try:
+            # Move only (default). Optional click for rapid validation.
+            self.pyautogui.moveTo(x, y, duration=0)
+            if self.click_after_move.get():
+                self.pyautogui.click(x, y)
+            self.status.set(f"Moved to {name}: ({x}, {y})" + (" and clicked" if self.click_after_move.get() else ""))
+        except Exception as exc:
+            self.status.set(f"Move/click failed: {exc}")
+
+    def _read_player(self):
+        if not self.detector:
+            self.status.set("Detector not initialized (reload config).")
+            return
+        try:
+            screen = self.detector.capture_game()
+            total, is_soft = self.detector.detect_player_total(screen)
+            if total is None:
+                self.player_out.set("player: None")
+            else:
+                self.player_out.set(f"player: {'soft' if is_soft else 'hard'} {total}")
+            self.status.set("Player read complete.")
+        except Exception as exc:
+            self.status.set(f"Player read failed: {exc}")
+
+    def _read_dealer(self):
+        if not self.detector:
+            self.status.set("Detector not initialized (reload config).")
+            return
+        try:
+            screen = self.detector.capture_game()
+            total = self.detector.detect_dealer_total(screen)
+            self.dealer_out.set(f"dealer: {total if total is not None else 'None'}")
+            self.status.set("Dealer read complete.")
+        except Exception as exc:
+            self.status.set(f"Dealer read failed: {exc}")
 
 
 def run_bot_mode(args):

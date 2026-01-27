@@ -36,6 +36,7 @@ In the GUI:
 - Click **Refresh** to read the current foreground window title.
 - Click **Set from foreground** (optional).
 - Click **Save to config**.
+- Optional: click **Open debugger** to manually move/click to configured positions and live-read totals.
 
 What the code does:
 - `GAME_WINDOW_TITLE` is used by `GameController.click_button()` to block clicks if the game is not focused.
