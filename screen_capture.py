@@ -12,10 +12,17 @@ import ctypes
 import os
 import re
 from pathlib import Path
+from typing import Optional, Dict, Any
 
 from config_loader import load_config
 
 config = load_config()
+
+try:
+    # Optional dependency: used only when diagnostics dump mode is enabled.
+    from diagnostics import DiagnosticIteration
+except Exception:
+    DiagnosticIteration = None  # type: ignore
 
 # Try to import pytesseract
 try:
@@ -90,6 +97,22 @@ class GOP3Detector:
             return self.capture.capture_screen(self.config.GAME_WINDOW)
         return self.capture.capture_screen()
 
+    def _diag_save(
+        self,
+        diag: Optional["DiagnosticIteration"],
+        *,
+        image_name: Optional[str] = None,
+        image=None,
+        json_name: Optional[str] = None,
+        json_obj: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if not diag or not getattr(diag, "enabled", False):
+            return
+        if image_name and image is not None:
+            diag.save_image(image_name, image)
+        if json_name and json_obj is not None:
+            diag.save_json(json_name, json_obj)
+
     def _preprocess_for_ocr(self, image, scale: float) -> np.ndarray:
         """Preprocess an ROI for OCR using common Tesseract quality steps."""
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -147,7 +170,7 @@ class GOP3Detector:
 
         return thresh
 
-    def _detect_blue_circle_total(self, roi) -> tuple:
+    def _detect_blue_circle_total(self, roi, diag: Optional["DiagnosticIteration"] = None, tag: str = "total") -> tuple:
         """
         Detect a hand total from a blue circle indicator within a ROI.
         Returns (total, is_soft) or (None, False) if not detected.
@@ -165,6 +188,7 @@ class GOP3Detector:
         lower_blue = np.array(getattr(self.config, 'BLUE_CIRCLE_HSV_LOWER', (70, 30, 40)))
         upper_blue = np.array(getattr(self.config, 'BLUE_CIRCLE_HSV_UPPER', (140, 255, 255)))
         blue_mask = cv2.inRange(hsv, lower_blue, upper_blue)
+        self._diag_save(diag, image_name=f"{tag}_blue_mask.png", image=blue_mask)
 
         # Find contours of blue regions
         contours, _ = cv2.findContours(blue_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -202,7 +226,7 @@ class GOP3Detector:
 
         candidates.sort(key=lambda c: (c[0], c[1]), reverse=True)
 
-        for circularity, area, x, y, cw, ch in candidates:
+        for idx, (circularity, area, x, y, cw, ch) in enumerate(candidates):
             # Extract the blue circle region, cropping inner area to exclude border
             pad = int(min(cw, ch) * 0.15)
             inner_x = x + pad
@@ -219,6 +243,20 @@ class GOP3Detector:
             try:
                 text = ""
                 processed = self._preprocess_for_ocr(circle_roi, ocr_scale)
+                if diag and getattr(diag, "enabled", False) and idx < 3:
+                    self._diag_save(
+                        diag,
+                        image_name=f"{tag}_candidate_{idx}_circle.png",
+                        image=circle_roi,
+                        json_name=f"{tag}_candidate_{idx}.json",
+                        json_obj={
+                            "circularity": float(circularity),
+                            "area": float(area),
+                            "bbox": [int(x), int(y), int(cw), int(ch)],
+                            "pad": int(pad),
+                        },
+                    )
+                    self._diag_save(diag, image_name=f"{tag}_candidate_{idx}_processed.png", image=processed)
 
                 # Use EasyOCR if configured and available
                 if ocr_engine == 'easyocr' and EASYOCR_AVAILABLE:
@@ -233,6 +271,15 @@ class GOP3Detector:
                     results = EASYOCR_READER.readtext(processed_bgr, allowlist='0123456789/')
                     if results:
                         text = results[0][1]
+                    if diag and getattr(diag, "enabled", False) and idx < 3:
+                        self._diag_save(
+                            diag,
+                            json_name=f"{tag}_candidate_{idx}_easyocr.json",
+                            json_obj={
+                                "results": [(r[1], float(r[2])) for r in results[:5]],
+                                "chosen": text,
+                            },
+                        )
 
                 # Fallback to Tesseract
                 if not text and TESSERACT_AVAILABLE:
@@ -244,6 +291,12 @@ class GOP3Detector:
                         ).strip()
                         if text:
                             break
+                    if diag and getattr(diag, "enabled", False) and idx < 3:
+                        self._diag_save(
+                            diag,
+                            json_name=f"{tag}_candidate_{idx}_tesseract.json",
+                            json_obj={"text": text},
+                        )
 
                 # Check for soft hand format: "low/high" (e.g., "10/20")
                 soft_match = re.match(r'(\d+)/(\d+)', text)
@@ -263,7 +316,7 @@ class GOP3Detector:
 
         return (None, False)
 
-    def _ocr_text_from_circle(self, circle_roi) -> str:
+    def _ocr_text_from_circle(self, circle_roi, diag: Optional["DiagnosticIteration"] = None, tag: str = "circle") -> str:
         """OCR the circle region for raw total text."""
         ocr_engine = getattr(self.config, 'OCR_ENGINE', 'tesseract')
         ocr_scale = getattr(self.config, 'OCR_SCALE', 2.0)
@@ -274,6 +327,7 @@ class GOP3Detector:
             processed = self._preprocess_for_ocr(circle_roi, ocr_scale)
         except Exception:
             return ""
+        self._diag_save(diag, image_name=f"{tag}_processed.png", image=processed)
 
         # EasyOCR first if configured
         if ocr_engine == 'easyocr' and EASYOCR_AVAILABLE:
@@ -288,6 +342,11 @@ class GOP3Detector:
                 results = EASYOCR_READER.readtext(processed_bgr, allowlist='0123456789/')
                 if results:
                     text = results[0][1]
+                self._diag_save(
+                    diag,
+                    json_name=f"{tag}_easyocr.json",
+                    json_obj={"results": [(r[1], float(r[2])) for r in results[:5]], "chosen": text},
+                )
             except Exception:
                 text = ""
 
@@ -301,6 +360,7 @@ class GOP3Detector:
                     ).strip()
                     if text:
                         break
+                self._diag_save(diag, json_name=f"{tag}_tesseract.json", json_obj={"text": text})
             except Exception:
                 return ""
 
@@ -579,7 +639,7 @@ class GOP3Detector:
 
         self.template_ready = bool(self.digit_templates)
 
-    def detect_player_total(self, screen) -> tuple:
+    def detect_player_total(self, screen, diag: Optional["DiagnosticIteration"] = None) -> tuple:
         """
         Detect the player's hand total from the blue circle indicator.
 
@@ -599,6 +659,13 @@ class GOP3Detector:
         y2 = int(h * self.config.PLAYER_TOTAL_REGION['y_percent'][1])
 
         roi = screen[y1:y2, x1:x2]
+        self._diag_save(
+            diag,
+            image_name="player_total_roi.png",
+            image=roi,
+            json_name="player_total_roi.json",
+            json_obj={"x1": x1, "y1": y1, "x2": x2, "y2": y2},
+        )
         if getattr(self.config, 'TOTAL_READ_MODE', 'ocr') == 'template':
             total, is_soft = self._detect_blue_circle_total_template(roi)
             if total is not None:
@@ -607,14 +674,15 @@ class GOP3Detector:
                 return (None, False)
             circle_roi = self._find_blue_circle_roi(roi)
             if circle_roi is not None:
-                text = self._ocr_text_from_circle(circle_roi)
+                self._diag_save(diag, image_name="player_total_circle_roi.png", image=circle_roi)
+                text = self._ocr_text_from_circle(circle_roi, diag=diag, tag="player_total_circle")
                 self._learn_templates_from_circle(circle_roi, text)
                 total, is_soft = self._parse_total_text(text)
                 if total is not None:
                     return (total, is_soft)
-        return self._detect_blue_circle_total(roi)
+        return self._detect_blue_circle_total(roi, diag=diag, tag="player_total")
 
-    def detect_dealer_total(self, screen) -> int:
+    def detect_dealer_total(self, screen, diag: Optional["DiagnosticIteration"] = None) -> int:
         """
         Detect the dealer's visible hand total from the blue circle indicator.
 
@@ -630,6 +698,13 @@ class GOP3Detector:
         y2 = int(h * region['y_percent'][1])
 
         roi = screen[y1:y2, x1:x2]
+        self._diag_save(
+            diag,
+            image_name="dealer_total_roi.png",
+            image=roi,
+            json_name="dealer_total_roi.json",
+            json_obj={"x1": x1, "y1": y1, "x2": x2, "y2": y2},
+        )
         if getattr(self.config, 'TOTAL_READ_MODE', 'ocr') == 'template':
             total, _ = self._detect_blue_circle_total_template(roi)
             if total is not None:
@@ -638,15 +713,16 @@ class GOP3Detector:
                 return None
             circle_roi = self._find_blue_circle_roi(roi)
             if circle_roi is not None:
-                text = self._ocr_text_from_circle(circle_roi)
+                self._diag_save(diag, image_name="dealer_total_circle_roi.png", image=circle_roi)
+                text = self._ocr_text_from_circle(circle_roi, diag=diag, tag="dealer_total_circle")
                 self._learn_templates_from_circle(circle_roi, text)
                 total, _ = self._parse_total_text(text)
                 if total is not None:
                     return total
-        total, _ = self._detect_blue_circle_total(roi)
+        total, _ = self._detect_blue_circle_total(roi, diag=diag, tag="dealer_total")
         return total
 
-    def detect_player_card_total(self, screen) -> tuple:
+    def detect_player_card_total(self, screen, diag: Optional["DiagnosticIteration"] = None) -> tuple:
         """
         Attempt to read player card ranks from the card area as a sanity check.
 
@@ -669,8 +745,16 @@ class GOP3Detector:
         roi = screen[y1:y2, x1:x2]
         if roi.size == 0:
             return (None, False, [])
+        self._diag_save(
+            diag,
+            image_name="player_cards_roi.png",
+            image=roi,
+            json_name="player_cards_roi.json",
+            json_obj={"x1": x1, "y1": y1, "x2": x2, "y2": y2},
+        )
 
         processed = self._preprocess_for_ocr(roi, getattr(self.config, 'OCR_SCALE', 3.0))
+        self._diag_save(diag, image_name="player_cards_processed.png", image=processed)
         psm = getattr(self.config, 'CARD_OCR_PSM', 11)
         min_conf = getattr(self.config, 'CARD_OCR_MIN_CONF', 50)
 
@@ -801,7 +885,7 @@ class GOP3Detector:
 
         return None
 
-    def detect_buttons(self, screen) -> dict:
+    def detect_buttons(self, screen, diag: Optional["DiagnosticIteration"] = None) -> dict:
         """
         Get button positions.
 
@@ -880,6 +964,7 @@ class GOP3Detector:
             upper2 = np.array(getattr(self.config, 'BUTTON_COLOR_HSV_UPPER2', (180, 255, 255)))
 
             visible = {}
+            ratios: Dict[str, float] = {}
             for name, (x, y) in positions.items():
                 if getattr(config, 'DISABLE_SPLIT', False) and name == 'split':
                     continue
@@ -896,15 +981,21 @@ class GOP3Detector:
                 mask2 = cv2.inRange(hsv, lower2, upper2)
                 mask = cv2.bitwise_or(mask1, mask2)
                 ratio = float(cv2.countNonZero(mask)) / float(mask.size)
+                ratios[name] = ratio
                 if ratio >= threshold:
                     visible[name] = (x, y)
 
+            self._diag_save(
+                diag,
+                json_name="buttons_fixed_validation.json",
+                json_obj={"threshold": float(threshold), "ratios": ratios, "visible": sorted(list(visible.keys()))},
+            )
             return visible
 
         # Fallback to empty dict if no fixed positions
         return {}
 
-    def detect_auto_bet_checkbox(self, screen) -> tuple:
+    def detect_auto_bet_checkbox(self, screen, diag: Optional["DiagnosticIteration"] = None) -> tuple:
         """
         Detect the auto-bet checkbox state and position.
 
@@ -924,6 +1015,13 @@ class GOP3Detector:
         roi = screen[ry1:ry2, rx1:rx2]
         if roi.size == 0:
             return (None, None)
+        self._diag_save(
+            diag,
+            image_name="auto_bet_roi.png",
+            image=roi,
+            json_name="auto_bet_roi.json",
+            json_obj={"rx1": rx1, "ry1": ry1, "rx2": rx2, "ry2": ry2},
+        )
 
         gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
         blur = cv2.GaussianBlur(gray, (3, 3), 0)
@@ -968,6 +1066,7 @@ class GOP3Detector:
         inner = roi[y + pad:y + bh - pad, x + pad:x + bw - pad]
         if inner.size == 0:
             return (None, (cx, cy))
+        self._diag_save(diag, image_name="auto_bet_inner.png", image=inner)
 
         inner_gray = cv2.cvtColor(inner, cv2.COLOR_BGR2GRAY)
         bright_thresh = getattr(self.config, 'AUTO_BET_BRIGHT_THRESHOLD', 200)
@@ -975,9 +1074,20 @@ class GOP3Detector:
         check_ratio = getattr(self.config, 'AUTO_BET_CHECK_RATIO', 0.08)
         checked = bright_ratio >= check_ratio
 
+        self._diag_save(
+            diag,
+            json_name="auto_bet_result.json",
+            json_obj={
+                "bright_ratio": float(bright_ratio),
+                "bright_thresh": float(bright_thresh),
+                "check_ratio": float(check_ratio),
+                "checked": bool(checked),
+                "center": [int(cx), int(cy)],
+            },
+        )
         return (checked, (cx, cy))
 
-    def detect_game_state(self, screen) -> dict:
+    def detect_game_state(self, screen, diag: Optional["DiagnosticIteration"] = None) -> dict:
         """
         Detect complete game state from screen.
 
@@ -1002,8 +1112,9 @@ class GOP3Detector:
         }
 
         # Detect totals independently
-        total, is_soft = self.detect_player_total(screen)
-        dealer_total = self.detect_dealer_total(screen)
+        self._diag_save(diag, image_name="frame.png", image=screen)
+        total, is_soft = self.detect_player_total(screen, diag=diag)
+        dealer_total = self.detect_dealer_total(screen, diag=diag)
 
         state['player_total'] = total
         state['is_soft'] = is_soft
@@ -1012,7 +1123,7 @@ class GOP3Detector:
         # If we can read a player total, we're in player turn
         if total is not None:
             state['phase'] = 'player_turn'
-            state['buttons'] = self.detect_buttons(screen)
+            state['buttons'] = self.detect_buttons(screen, diag=diag)
             state['can_split'] = 'split' in state['buttons']
             state['can_double'] = 'double' in state['buttons']
 
@@ -1021,6 +1132,7 @@ class GOP3Detector:
         else:
             state['phase'] = 'betting'
 
+        self._diag_save(diag, json_name="detected_state.json", json_obj=state)
         return state
 
 
@@ -1029,7 +1141,7 @@ class GameController:
 
     def __init__(self, click_delay=0.2):
         self.click_delay = click_delay
-        pyautogui.PAUSE = 0.1
+        pyautogui.PAUSE = getattr(config, "PYAUTOGUI_PAUSE", 0.1)
         pyautogui.FAILSAFE = True  # Move to corner to abort
         self._last_focus_warn = 0.0
 

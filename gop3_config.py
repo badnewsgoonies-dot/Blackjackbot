@@ -92,6 +92,9 @@ CLICK_DELAY = 0.0       # Delay between clicks
 SCAN_INTERVAL = 0.1     # How often to scan the screen
 POST_CLICK_DELAY = 0.3  # Wait after clicking before next scan
 
+# PyAutoGUI runtime behavior (lower = faster). This is applied in GameController.
+PYAUTOGUI_PAUSE = 0.02
+
 # Human-like delay settings (disabled for speed)
 HUMAN_DELAY_MIN = 0.0   # Minimum delay before clicking (seconds)
 HUMAN_DELAY_MAX = 0.0   # Maximum delay before clicking (seconds)
@@ -105,9 +108,25 @@ CLICK_VERIFY_RETRIES = 0
 CLICK_VERIFY_RETRY_ACTIONS = ("stand",)
 CLICK_VERIFY_LOG = True
 
+# Diagnostics dump (opt-in).
+# When enabled, the bot will save per-iteration screenshots/ROIs/JSON into DIAGNOSTICS_DIR.
+DIAGNOSTICS_ENABLED = False
+DIAGNOSTICS_DIR = "diagnostics"
+DIAGNOSTICS_EVERY_N = 1
+DIAGNOSTICS_MAX_ITERS = 300
+DIAGNOSTICS_ZIP_ON_EXIT = False
+
 # Foreground focus logging
 FOCUS_CHECK_LOG = True
 FOCUS_CHECK_LOG_INTERVAL = 1.0
+
+# Action gating: require these buttons to be visible before any action click.
+# This prevents acting on partial/false detections.
+REQUIRE_BUTTONS_FOR_ACTION = ("hit", "stand")
+
+# Safety cap: stop taking actions if we exceed this many actions in one round.
+# (Helps avoid runaway loops if state is noisy.)
+MAX_ACTIONS_PER_ROUND = 12
 
 # Original human-like settings (uncomment to re-enable):
 # DECISION_DELAY = 0.8

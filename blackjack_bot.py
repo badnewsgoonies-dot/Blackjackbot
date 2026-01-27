@@ -15,6 +15,11 @@ from config_loader import load_config
 
 config = load_config()
 
+try:
+    from diagnostics import DiagnosticSession
+except Exception:
+    DiagnosticSession = None  # type: ignore
+
 
 # Global flag for hotkey stop
 _stop_requested = False
@@ -47,6 +52,29 @@ class BlackjackBot:
 
         self.detector = GOP3Detector(config)
         self.controller = GameController(click_delay=config.CLICK_DELAY)
+
+        self.diag_session = None
+        if DiagnosticSession is not None and getattr(config, "DIAGNOSTICS_ENABLED", False):
+            self.diag_session = DiagnosticSession(
+                base_dir=getattr(config, "DIAGNOSTICS_DIR", "diagnostics"),
+                enabled=True,
+                every_n=getattr(config, "DIAGNOSTICS_EVERY_N", 1),
+                max_iters=getattr(config, "DIAGNOSTICS_MAX_ITERS", 300),
+                zip_on_exit=getattr(config, "DIAGNOSTICS_ZIP_ON_EXIT", False),
+            )
+            try:
+                self.diag_session.write_meta(
+                    {
+                        "game_window_title": getattr(config, "GAME_WINDOW_TITLE", None),
+                        "total_read_mode": getattr(config, "TOTAL_READ_MODE", None),
+                        "ocr_engine": getattr(config, "OCR_ENGINE", None),
+                        "player_total_region": getattr(config, "PLAYER_TOTAL_REGION", None),
+                        "dealer_total_region": getattr(config, "DEALER_TOTAL_REGION", None),
+                        "timestamp": time.time(),
+                    }
+                )
+            except Exception:
+                pass
 
         self.running = False
         self.last_action = None
@@ -114,7 +142,7 @@ class BlackjackBot:
         if dealer_changed:
             self.last_dealer_total = dealer_total
 
-    def capture_state(self, screen, need_player=True, need_dealer=True):
+    def capture_state(self, screen, need_player=True, need_dealer=True, diag=None):
         """Capture state with cached totals and optional dealer total lock."""
         state = {
             'phase': 'unknown',
@@ -128,7 +156,7 @@ class BlackjackBot:
         }
 
         if need_player:
-            total, is_soft = self.detector.detect_player_total(screen)
+            total, is_soft = self.detector.detect_player_total(screen, diag=diag)
         else:
             total, is_soft = self.cached_player_total, self.cached_player_soft
 
@@ -138,7 +166,7 @@ class BlackjackBot:
         if self.dealer_total_locked and self.cached_dealer_total is not None:
             dealer_total = self.cached_dealer_total
         elif need_dealer:
-            dealer_total = self.detector.detect_dealer_total(screen)
+            dealer_total = self.detector.detect_dealer_total(screen, diag=diag)
         else:
             dealer_total = self.cached_dealer_total
 
@@ -146,12 +174,17 @@ class BlackjackBot:
 
         if total is not None:
             state['phase'] = 'player_turn'
-            state['buttons'] = self.detector.detect_buttons(screen)
+            state['buttons'] = self.detector.detect_buttons(screen, diag=diag)
             state['can_split'] = 'split' in state['buttons']
             state['can_double'] = 'double' in state['buttons']
         else:
             state['phase'] = 'betting'
 
+        if diag and getattr(diag, "enabled", False):
+            try:
+                diag.save_json("bot_capture_state.json", state)
+            except Exception:
+                pass
         return state
 
     def read_confirmed_state(self, require_player_total_change=False):
@@ -170,9 +203,28 @@ class BlackjackBot:
 
         while time.time() - start < max_wait and not _stop_requested:
             screen = self.detector.capture_game()
+            diag = self.diag_session.new_iteration("confirm") if self.diag_session else None
+            if diag and getattr(diag, "enabled", False):
+                try:
+                    diag.save_image("frame.png", screen)
+                    diag.save_json(
+                        "confirm_meta.json",
+                        {
+                            "require_player_total_change": bool(require_player_total_change),
+                            "stable_needed": int(stable_needed),
+                            "interval": float(interval),
+                            "max_wait": float(max_wait),
+                            "cached_player_total": self.cached_player_total,
+                            "cached_player_soft": bool(self.cached_player_soft),
+                            "cached_dealer_total": self.cached_dealer_total,
+                            "dealer_total_locked": bool(self.dealer_total_locked),
+                        },
+                    )
+                except Exception:
+                    pass
             need_player = self.cached_player_total is None
             need_dealer = not self.dealer_total_locked or self.cached_dealer_total is None
-            state = self.capture_state(screen, need_player=need_player, need_dealer=need_dealer)
+            state = self.capture_state(screen, need_player=need_player, need_dealer=need_dealer, diag=diag)
 
             player_total = state.get('player_total')
             is_soft = state.get('is_soft', False)
@@ -210,7 +262,7 @@ class BlackjackBot:
                     continue
 
             if getattr(config, 'ENABLE_CARD_SANITY_CHECK', False) and not self.player_total_verified:
-                card_total, card_soft, ranks = self.detector.detect_player_card_total(screen)
+                card_total, card_soft, ranks = self.detector.detect_player_card_total(screen, diag=diag)
                 if card_total is not None:
                     if card_total != player_total:
                         self.log(f"Card sanity check mismatch: total={player_total} cards={ranks} ({card_total})")
@@ -308,7 +360,23 @@ class BlackjackBot:
         stable = 0
         while time.time() - start < timeout and not _stop_requested:
             screen = self.detector.capture_game()
-            state = self.detector.detect_game_state(screen)
+            diag = self.diag_session.new_iteration(f"verify_{action}") if self.diag_session else None
+            if diag and getattr(diag, "enabled", False):
+                try:
+                    diag.save_image("frame.png", screen)
+                    diag.save_json(
+                        "verify_meta.json",
+                        {
+                            "action": action,
+                            "stable_needed": int(stable_needed),
+                            "interval": float(interval),
+                            "timeout": float(timeout),
+                            "prev_state": prev_state,
+                        },
+                    )
+                except Exception:
+                    pass
+            state = self.detector.detect_game_state(screen, diag=diag)
             if not state:
                 time.sleep(interval)
                 continue
@@ -548,6 +616,11 @@ class BlackjackBot:
             can_split = state['can_split']
             can_double = state['can_double']
 
+            max_actions = getattr(config, "MAX_ACTIONS_PER_ROUND", 12)
+            if self.actions_in_round >= max_actions:
+                self.log(f"Max actions per round reached ({self.actions_in_round}/{max_actions}); refusing to act")
+                return False
+
             if player_total is None:
                 self.log("Could not detect player total")
                 return False
@@ -557,6 +630,12 @@ class BlackjackBot:
                 return False
             if not totals_confirmed:
                 self.log("Totals not confirmed yet")
+                return False
+
+            required = getattr(config, "REQUIRE_BUTTONS_FOR_ACTION", ("hit", "stand"))
+            missing = [b for b in required if b and b not in buttons]
+            if missing:
+                self.log(f"Required buttons missing {missing}; refusing to act")
                 return False
             if player_total == 21 and self.actions_in_round == 0:
                 self.log("Blackjack detected on initial deal")
@@ -631,6 +710,15 @@ class BlackjackBot:
         finally:
             self.running = False
             keyboard.unhook_all()  # Clean up hotkey
+            if self.diag_session:
+                try:
+                    zip_path = self.diag_session.finalize()
+                    if zip_path:
+                        print(f"[DIAG] Saved diagnostics bundle: {zip_path}")
+                    else:
+                        print(f"[DIAG] Saved diagnostics session: {self.diag_session.session_dir}")
+                except Exception:
+                    pass
             print(f"\nSession complete. Hands played: {self.hands_played}")
 
 
@@ -661,8 +749,39 @@ def main():
         action='store_true',
         help='Run single test iteration'
     )
+    parser.add_argument(
+        '--diag',
+        action='store_true',
+        help='Enable diagnostics dump (images + JSON) to DIAGNOSTICS_DIR'
+    )
+    parser.add_argument(
+        '--diag-zip',
+        action='store_true',
+        help='Zip diagnostics session at exit (implies --diag)'
+    )
+    parser.add_argument(
+        '--diag-every',
+        type=int,
+        default=None,
+        help='Diagnostics: dump every N iterations (overrides DIAGNOSTICS_EVERY_N)'
+    )
+    parser.add_argument(
+        '--diag-max-iters',
+        type=int,
+        default=None,
+        help='Diagnostics: max iterations per session (overrides DIAGNOSTICS_MAX_ITERS)'
+    )
 
     args = parser.parse_args()
+
+    if args.diag or args.diag_zip:
+        setattr(config, "DIAGNOSTICS_ENABLED", True)
+    if args.diag_zip:
+        setattr(config, "DIAGNOSTICS_ZIP_ON_EXIT", True)
+    if args.diag_every is not None:
+        setattr(config, "DIAGNOSTICS_EVERY_N", int(args.diag_every))
+    if args.diag_max_iters is not None:
+        setattr(config, "DIAGNOSTICS_MAX_ITERS", int(args.diag_max_iters))
 
     bot = BlackjackBot(
         debug=args.debug,

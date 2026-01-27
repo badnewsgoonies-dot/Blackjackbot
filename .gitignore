@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+
+# Local editor/agent config
+.claude/settings.local.json
+
+# Diagnostics / debug outputs
+diagnostics/
+diagnostics.py
+debug_*.png
+test_debug_*.png
+current_screen.png
+live_test.png
+test_*.png
+
+# Calibration artifacts
+calibrated_positions.json
+
+# PyInstaller artifacts
+build/
+dist/
+*.spec
+build_pyinstaller*.log
+
+# Misc
+nul
