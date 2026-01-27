@@ -22,8 +22,12 @@ def _hash_text(text: str) -> str:
 
 
 def _load_strategy():
-    data_text = CHART_PATH.read_text(encoding="utf-8")
-    data = json.loads(data_text)
+    try:
+        data_text = CHART_PATH.read_text(encoding="utf-8")
+        data = json.loads(data_text)
+    except Exception as exc:
+        print(f"[ERROR] Failed to load strategy_chart.json: {exc}")
+        raise SystemExit(1)
 
     global ACTIVE_RULESET, CHART_HASH, CHART_META, _CHART_MTIME
     CHART_HASH = _hash_text(data_text)
@@ -44,6 +48,13 @@ def _load_strategy():
     else:
         ACTIVE_RULESET = (data.get("meta") or {}).get("active_ruleset") or (data.get("meta") or {}).get("ruleset") or "default"
         CHART_META = (data.get("meta") or {})
+    if not isinstance(table_source, dict):
+        print("[ERROR] strategy_chart.json format error: active ruleset is not a dict.")
+        raise SystemExit(1)
+    for section in ("hard", "soft", "pair"):
+        if section not in table_source:
+            print(f"[ERROR] strategy_chart.json missing '{section}' table.")
+            raise SystemExit(1)
 
     def _to_table(section: str):
         table = {}

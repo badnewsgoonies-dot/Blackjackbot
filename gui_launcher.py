@@ -679,6 +679,11 @@ class HUDOverlay(tk.Toplevel):
                 except Exception:
                     if not getattr(self, "_warned_clickthrough", False):
                         print("[WARN] HUD overlay click-through not available; overlay stays topmost.")
+                        if hasattr(self.master, "status"):
+                            try:
+                                self.master.status.set("HUD overlay not click-through; may block clicks.")
+                            except Exception:
+                                pass
                         self._warned_clickthrough = True
         else:
             # If no window found, keep hidden but retry.
