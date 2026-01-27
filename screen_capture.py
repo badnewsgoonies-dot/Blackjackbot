@@ -636,11 +636,16 @@ class GOP3Detector:
     def _load_digit_templates(self):
         """Load digit templates from calibration images."""
         self.digit_templates = {}
-        base_path = getattr(self.config, 'TEMPLATE_TOTALS_PATH', 'Calibration Images')
+        base_path = getattr(self.config, 'TEMPLATE_TOTALS_PATH', 'timing_frames')
         folder = Path(base_path)
         if not folder.exists():
-            self.template_ready = False
-            return
+            fallback = Path("timing_frames")
+            if fallback.exists():
+                folder = fallback
+                print(f"[WARN] TEMPLATE_TOTALS_PATH '{base_path}' missing; using '{fallback}'.")
+            else:
+                self.template_ready = False
+                return
 
         charset = set(getattr(self.config, 'TEMPLATE_CHARSET', '0123456789/'))
         image_paths = sorted(folder.glob('*.png'))
@@ -958,10 +963,14 @@ class GOP3Detector:
             # Try dynamic detection in the button region to correct offsets
             region = getattr(self.config, 'BUTTON_DETECT_REGION', None)
             if region:
-                rx1 = int(w * region['x_percent'][0])
-                rx2 = int(w * region['x_percent'][1])
-                ry1 = int(h * region['y_percent'][0])
-                ry2 = int(h * region['y_percent'][1])
+                rect = self._region_rect(screen, region)
+                if rect:
+                    rx1, ry1, rx2, ry2 = rect
+                else:
+                    rx1 = int(w * region['x_percent'][0])
+                    rx2 = int(w * region['x_percent'][1])
+                    ry1 = int(h * region['y_percent'][0])
+                    ry2 = int(h * region['y_percent'][1])
 
                 roi = screen[ry1:ry2, rx1:rx2]
                 if roi.size != 0:

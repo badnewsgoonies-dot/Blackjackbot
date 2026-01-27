@@ -699,6 +699,13 @@ class BlackjackBot:
             return
         try:
             chart_info = get_chart_info()
+            auto_cal = None
+            try:
+                status = self.detector.auto_cal.status
+                scale = self.detector.auto_cal.transform.scale if self.detector.auto_cal.transform else None
+                auto_cal = {"status": status, "scale": scale}
+            except Exception:
+                auto_cal = None
             payload = {
                 "phase": phase,
                 "player_total": player_total,
@@ -707,6 +714,7 @@ class BlackjackBot:
                 "action": action if action else self.last_decision,
                 "ruleset": chart_info.get("active_ruleset"),
                 "chart_hash": chart_info.get("chart_hash"),
+                "auto_cal": auto_cal,
                 "ts": time.time(),
             }
             temp_path = f"{self.hud_path}.tmp"

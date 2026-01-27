@@ -118,6 +118,7 @@ The bot follows standard basic strategy ("the book"):
 
 ### Wrong resolution
 - The bot is calibrated for 2560x1440 and uses anchor-based auto-calibration to align clicks/ROIs. If anchors fail to match (theme or layout changes), it falls back to basic scaling. Re-run calibration or update `BUTTON_POSITIONS` / `*_REGION` for best accuracy.
+- Template mode now uses `timing_frames/` as its source when building digit templates (`TEMPLATE_TOTALS_PATH`).
 
 ### Platform notes
 - Focus checks use Win32 APIs; on macOS/Linux, set `GAME_WINDOW_TITLE = None` to avoid clicks being blocked by the foreground-title check.

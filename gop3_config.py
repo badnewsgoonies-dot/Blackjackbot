@@ -156,7 +156,7 @@ CARD_SANITY_STRICT = True
 # Total read mode: "template" (fast) or "ocr"
 TOTAL_READ_MODE = "ocr"
 OCR_ENGINE = "easyocr"  # "tesseract" or "easyocr"
-TEMPLATE_TOTALS_PATH = "Calibration Images"
+TEMPLATE_TOTALS_PATH = "timing_frames"
 TEMPLATE_CHARSET = "0123456789/"
 TEMPLATE_SIZE = (24, 36)
 TEMPLATE_MATCH_THRESHOLD = 0.60

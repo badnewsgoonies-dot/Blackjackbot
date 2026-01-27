@@ -630,6 +630,7 @@ class HUDOverlay(tk.Toplevel):
         self.phase_var = tk.StringVar(value="phase: --")
         self.totals_var = tk.StringVar(value="P: --  D: --")
         self.action_var = tk.StringVar(value="action: --")
+        self.cal_var = tk.StringVar(value="cal: --")
         self.last_state = None
         self.warned_stale = False
 
@@ -639,6 +640,7 @@ class HUDOverlay(tk.Toplevel):
         ttk.Label(row, textvariable=self.phase_var, width=16).pack(side="left")
         ttk.Label(row, textvariable=self.totals_var, width=22, anchor="center").pack(side="left", expand=True)
         ttk.Label(row, textvariable=self.action_var, width=28, anchor="e").pack(side="right")
+        ttk.Label(row, textvariable=self.cal_var, width=12, anchor="e").pack(side="right", padx=(8, 0))
 
         self.after(200, self._tick)
 
@@ -688,6 +690,13 @@ class HUDOverlay(tk.Toplevel):
             dt = state.get("dealer_total")
             soft = state.get("is_soft")
             action = state.get("action") or "--"
+            auto_cal = state.get("auto_cal") or {}
+            cal_status = auto_cal.get("status") or "--"
+            cal_scale = auto_cal.get("scale")
+            if cal_scale:
+                cal_text = f"{cal_status}:{cal_scale:.2f}"
+            else:
+                cal_text = f"{cal_status}"
             ruleset = state.get("ruleset") or "--"
             ptxt = "--" if pt is None else f"{'S' if soft else 'H'}{pt}"
             dtxt = "--" if dt is None else str(dt)
@@ -695,6 +704,7 @@ class HUDOverlay(tk.Toplevel):
             self.totals_var.set(f"P: {ptxt}  D: {dtxt}")
             action_text = action.upper() if isinstance(action, str) else action
             self.action_var.set(f"{ruleset} | {action_text}")
+            self.cal_var.set(f"cal: {cal_text}")
 
         rect = self._game_rect()
         if rect:
