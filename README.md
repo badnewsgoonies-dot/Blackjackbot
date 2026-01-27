@@ -99,6 +99,7 @@ The bot follows standard basic strategy ("the book"):
 
 - `blackjack_bot.py` - Main bot loop
 - `basic_strategy.py` - Strategy lookup tables (hard, soft, pairs)
+- `strategy_chart.json` - Single source of truth for strategy tables (hard/soft/pairs)
 - `screen_capture.py` - Screen capture and detection
 - `gop3_config.py` - Configuration (colors, regions, timing)
 - `test_detection.py` - Test script for calibration images
@@ -120,3 +121,12 @@ The bot follows standard basic strategy ("the book"):
 ### Platform notes
 - Focus checks use Win32 APIs; on macOS/Linux, set `GAME_WINDOW_TITLE = None` to avoid clicks being blocked by the foreground-title check.
 - `pyautogui` needs an active display; on Linux set `$DISPLAY` (headless runs without X/VNC will fail).
+
+## Strategy Chart
+- Edit `strategy_chart.json` to tweak basic strategy (values: `H`, `S`, `D`, `Ds`, `P`; keys are strings of totals/upcards).
+- `basic_strategy.py` loads this chart at import; keep the schema intact (meta + hard/soft/pair sections).
+- Validate changes with:
+
+```bash
+python3 -m unittest tests.test_strategy
+```
