@@ -7,7 +7,7 @@ Screen resolution: 3440x1440
 GAME_WINDOW = None
 
 # Foreground window title substring required for clicking (set to None to disable)
-GAME_WINDOW_TITLE = None
+GAME_WINDOW_TITLE = "GOP3"
 
 # Capture only the game window rect (recommended if you run windowed or multi-monitor).
 # If enabled, the detector will try to find a visible window whose title contains GAME_WINDOW_TITLE.
@@ -21,14 +21,14 @@ SCREEN_HEIGHT = 1800
 # These are the exact center positions of each button
 # Adjusted +80 pixels right and -80 pixels up (diagonally up-right)
 BUTTON_POSITIONS = {
-    'hit': (1324, 1424),
-    'stand': (1580, 1434),
-    'double': (1828, 1430),
-    'split': (2085, 1428),
+    'hit': (1290, 1553),
+    'stand': (1619, 1545),
+    'double': (1843, 1545),
+    'split': (2155, 1554),
 }
 
 # Bet button position (1K bet - leftmost bet button)
-BET_BUTTON_POSITION = (1323, 1425)
+BET_BUTTON_POSITION = (1270, 1530)
 
 # Use fixed positions instead of detection
 USE_FIXED_BUTTONS = True
@@ -63,28 +63,28 @@ BUTTON_MIN_HEIGHT = 30
 # Player total region (where the number like "12" or "10/20" appears)
 # Based on analysis: bottom center area
 PLAYER_TOTAL_REGION = {
-    'x_percent': (0.39, 0.59),
-    'y_percent': (0.57, 0.71),
+    'x_percent': (0.40, 0.60),
+    'y_percent': (0.34, 0.48),
 }
 
 # Dealer card region (where dealer's up card appears)
 # Based on analysis: top center area
 DEALER_CARD_REGION = {
-    'x_percent': (0.41, 0.57),
-    'y_percent': (0.27, 0.51),
+    'x_percent': (0.22, 0.38),
+    'y_percent': (0.31, 0.55),
 }
 
 # Dealer total region (blue circle indicator with one card face down)
 # Defaults to the same area as the dealer card region.
 DEALER_TOTAL_REGION = {
-    'x_percent': (0.41, 0.57),
-    'y_percent': (0.27, 0.51),
+    'x_percent': (0.22, 0.38),
+    'y_percent': (0.31, 0.55),
 }
 
 # Player card region (used for sanity-check OCR of card ranks)
 PLAYER_CARD_REGION = {
-    'x_percent': (0.42, 0.56),
-    'y_percent': (0.58, 0.71),
+    'x_percent': (0.43, 0.57),
+    'y_percent': (0.34, 0.47),
 }
 
 # Card rank detection
@@ -96,8 +96,30 @@ CLICK_DELAY = 0.0       # Delay between clicks
 SCAN_INTERVAL = 0.1     # How often to scan the screen
 POST_CLICK_DELAY = 0.3  # Wait after clicking before next scan
 
+# Adaptive/event-driven scanning (recommended)
+BETTING_SCAN_INTERVAL = 0.8       # Slow poll while waiting to bet/deal
+WAITING_SCAN_INTERVAL = 0.8       # Slow poll while dealer plays / between hands
+PLAYER_TURN_SCAN_INTERVAL = 0.12  # Fast poll during player_turn (mostly cached reads)
+
+# Action-specific post-click delays (animation settling)
+# Tuned from observed GOP3 timings (windowed, 100% DPI).
+POST_BET_DELAY = 3.4
+POST_HIT_DELAY = 0.85
+POST_STAND_DELAY = 0.30
+POST_DOUBLE_DELAY = 0.90
+POST_SPLIT_DELAY = 1.00
+
 # PyAutoGUI runtime behavior (lower = faster). This is applied in GameController.
 PYAUTOGUI_PAUSE = 0.02
+
+# Click backend
+# - "auto": prefer pydirectinput if installed, else pyautogui
+# - "pyautogui": force pyautogui.click
+# - "pydirectinput": force pydirectinput.click (if installed)
+CLICK_BACKEND = "auto"
+CLICK_BACKEND_PAUSE = 0.02
+CLICK_MOVE_BEFORE_CLICK = True
+CLICK_MOVE_DURATION = 0.0
 
 # Human-like delay settings (disabled for speed)
 HUMAN_DELAY_MIN = 0.0   # Minimum delay before clicking (seconds)
@@ -105,7 +127,7 @@ HUMAN_DELAY_MAX = 0.0   # Maximum delay before clicking (seconds)
 
 # Click verification (keep tight so turns stay within timing budget)
 CLICK_VERIFY_ENABLED = True
-CLICK_VERIFY_TIMEOUT = 0.7
+CLICK_VERIFY_TIMEOUT = 0.8
 CLICK_VERIFY_INTERVAL = 0.08
 CLICK_VERIFY_STABLE_COUNT = 2
 CLICK_VERIFY_LOG = True
@@ -115,7 +137,7 @@ CLICK_VERIFY_LOG = True
 # - "skip": treat as no-op (do not advance internal state)
 # - "stop": stop the bot
 CLICK_VERIFY_ON_FAIL = "retry"   # "retry" | "skip" | "stop"
-CLICK_VERIFY_MAX_RETRIES = 2
+CLICK_VERIFY_MAX_RETRIES = 1
 CLICK_VERIFY_FALLBACK = "skip"  # used when CLICK_VERIFY_ON_FAIL="retry"
 
 # Diagnostics dump (opt-in).
@@ -143,7 +165,7 @@ DEALING_GRACE_SEC = 2.0
 MAX_ACTIONS_PER_ROUND = 12
 
 # Prefer dynamic button detection (contours/HSV) over fixed coordinates.
-PREFER_DYNAMIC_BUTTONS = True
+PREFER_DYNAMIC_BUTTONS = False
 
 # Optional betting UI detection (used to distinguish betting vs waiting/result):
 # If not set, defaults to action button HSV thresholds.
@@ -210,9 +232,9 @@ TEMPLATE_MAX_COMPONENTS = 6
 TEMPLATE_FALLBACK_TO_OCR = True
 
 # Total read synchronization
-TOTAL_READ_MAX_WAIT = 0.5   # Was 2.0
-TOTAL_READ_STABLE_COUNT = 1
-TOTAL_READ_INTERVAL = 0.05  # Was 0.1
+TOTAL_READ_MAX_WAIT = 0.8
+TOTAL_READ_STABLE_COUNT = 2
+TOTAL_READ_INTERVAL = 0.05
 
 # Optional dealer up-card OCR (disable to speed up totals read)
 READ_DEALER_CARD = False
@@ -222,6 +244,8 @@ DISABLE_SPLIT = True
 FORCE_HARD_HAND = True
 
 # Auto-bet checkbox detection
+# If True, the bot will try to force the in-game auto-bet checkbox OFF when visible.
+AUTO_BET_ENFORCE_OFF = False
 AUTO_BET_SEARCH_REGION = {
     'x_percent': (0.08, 0.40),
     'y_percent': (0.73, 0.90),
