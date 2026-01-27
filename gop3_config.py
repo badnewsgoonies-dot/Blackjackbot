@@ -7,7 +7,7 @@ Screen resolution: 3440x1440
 GAME_WINDOW = None
 
 # Foreground window title substring required for clicking (set to None to disable)
-GAME_WINDOW_TITLE = "GOP3"
+GAME_WINDOW_TITLE = None
 
 # Capture only the game window rect (recommended if you run windowed or multi-monitor).
 # If enabled, the detector will try to find a visible window whose title contains GAME_WINDOW_TITLE.
@@ -43,7 +43,7 @@ MOUSE_MOVE_MAX = 0.45
 MOUSE_MIDPOINT_JITTER = 35
 
 # Validate button visibility by color at fixed positions
-ENABLE_BUTTON_COLOR_VALIDATION = True
+ENABLE_BUTTON_COLOR_VALIDATION = False
 BUTTON_VALIDATE_RADIUS = 18
 BUTTON_VALIDATE_THRESHOLD = 0.25
 BUTTON_COLOR_HSV_LOWER = (0, 120, 80)
@@ -158,7 +158,13 @@ REQUIRE_BUTTONS_FOR_ACTION = ("hit", "stand")
 
 # Dealing grace period (seconds): after a bet click, cards/totals may animate in.
 # During this time, the bot should not assume missing buttons/totals means "betting".
-DEALING_GRACE_SEC = 2.0
+DEALING_GRACE_SEC = 6.0
+MAX_BET_ATTEMPTS = 1
+BETTING_UI_USE_AUTO_BET = True
+
+# When using --click-bet, require the bet button to be detected as visible.
+# Set to False to always click the configured BET_BUTTON_POSITION during betting_ui.
+REQUIRE_BET_BUTTON_VISIBLE = False
 
 # Safety cap: stop taking actions if we exceed this many actions in one round.
 # (Helps avoid runaway loops if state is noisy.)
@@ -173,8 +179,8 @@ BET_BUTTON_HSV_LOWER = BUTTON_COLOR_HSV_LOWER
 BET_BUTTON_HSV_UPPER = BUTTON_COLOR_HSV_UPPER
 BET_BUTTON_HSV_LOWER2 = BUTTON_COLOR_HSV_LOWER2
 BET_BUTTON_HSV_UPPER2 = BUTTON_COLOR_HSV_UPPER2
-BET_VALIDATE_RADIUS = 18
-BET_VALIDATE_THRESHOLD = 0.20
+BET_VALIDATE_RADIUS = 36
+BET_VALIDATE_THRESHOLD = 0.03
 
 # Original human-like settings (uncomment to re-enable):
 # DECISION_DELAY = 0.8

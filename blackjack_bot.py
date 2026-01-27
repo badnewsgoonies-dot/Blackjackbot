@@ -99,6 +99,8 @@ class BlackjackBot:
         self.last_auto_bet_check = 0.0
         self.auto_bet_checked = None
         self.last_bet_click_at = 0.0
+        self.last_phase = None
+        self.bet_attempts_in_phase = 0
 
     def reset_round_cache(self):
         """Reset cached totals when a round ends."""
@@ -332,6 +334,20 @@ class BlackjackBot:
         stable_needed = getattr(config, 'CLICK_VERIFY_STABLE_COUNT', 2)
         log_enabled = getattr(config, 'CLICK_VERIFY_LOG', True)
 
+        # Wait for animations to settle before reading; avoids OCR during known-noise windows.
+        # These delays should be tuned per machine/game speed.
+        try:
+            if action == "hit":
+                time.sleep(float(getattr(config, "POST_HIT_DELAY", 0.55)))
+            elif action == "stand":
+                time.sleep(float(getattr(config, "POST_STAND_DELAY", 0.25)))
+            elif action == "double":
+                time.sleep(float(getattr(config, "POST_DOUBLE_DELAY", 0.75)))
+            elif action == "split":
+                time.sleep(float(getattr(config, "POST_SPLIT_DELAY", 0.90)))
+        except Exception:
+            pass
+
         prev_player_total = prev_state.get('player_total')
         prev_is_soft = prev_state.get('is_soft', False)
         prev_dealer_total = prev_state.get('dealer_total')
@@ -361,7 +377,8 @@ class BlackjackBot:
             if action == 'stand':
                 if phase != prev_phase or phase != 'player_turn':
                     return True
-                if button_keys and prev_button_keys and button_keys != prev_button_keys:
+                # Treat any change in available actions as success, including buttons disappearing.
+                if prev_button_keys and button_keys != prev_button_keys:
                     return True
                 if dealer_total is not None and prev_dealer_total is not None and dealer_total != prev_dealer_total:
                     return True
@@ -627,6 +644,37 @@ class BlackjackBot:
         self.auto_bet_checked = True
         return True
 
+    def ensure_auto_bet_disabled(self) -> bool:
+        """Ensure auto-bet checkbox is disabled (unchecked)."""
+        check_interval = getattr(config, "AUTO_BET_CHECK_INTERVAL", 1.0)
+        now = time.time()
+        if now - self.last_auto_bet_check < check_interval:
+            return False
+        self.last_auto_bet_check = now
+
+        screen = self.detector.capture_game()
+        checked, position = self.detector.detect_auto_bet_checkbox(screen)
+        if checked is None or position is None:
+            # Not always visible depending on UI; that's OK.
+            self.log("Auto-bet checkbox not detected (cannot enforce off)")
+            return False
+
+        self.auto_bet_checked = checked
+        if not checked:
+            return False
+
+        jitter = getattr(config, "AUTO_BET_JITTER", 3)
+        pos = self.jitter_point(position, jitter=jitter)
+        print(f"Auto-bet checked, disabling at {pos}...")
+        self.human_delay()
+        clicked = self.controller.click_button(pos)
+        if not clicked:
+            self.log("Click blocked or failed to send (auto-bet off)")
+            return False
+        self.last_action = "auto_bet_off"
+        self.auto_bet_checked = False
+        return True
+
     def place_bet(self) -> bool:
         """Place a bet during betting phase using fixed position."""
         if hasattr(config, 'BET_BUTTON_POSITION'):
@@ -653,6 +701,12 @@ class BlackjackBot:
         self.log(f"State: {state}")
 
         phase = state['phase']
+        prev_phase = self.last_phase
+        if phase != 'betting':
+            self.bet_attempts_in_phase = 0
+        elif prev_phase != 'betting':
+            self.bet_attempts_in_phase = 0
+        self.last_phase = phase
         buttons = state['buttons']
         player_total = state.get('player_total')
         is_soft = state.get('is_soft', False)
@@ -669,6 +723,10 @@ class BlackjackBot:
             if self.auto_bet:
                 return self.ensure_auto_bet_enabled()
 
+            if getattr(config, "AUTO_BET_ENFORCE_OFF", False):
+                if self.ensure_auto_bet_disabled():
+                    return True
+
             if self.click_bet:
                 # Avoid spamming the bet button while the hand is transitioning/dealing.
                 grace = float(getattr(config, "DEALING_GRACE_SEC", 2.0))
@@ -677,8 +735,18 @@ class BlackjackBot:
                     return False
                 if not state.get("betting_ui", False):
                     return False
+                require_bet_visible = bool(getattr(config, "REQUIRE_BET_BUTTON_VISIBLE", True))
+                if require_bet_visible and not state.get("bet_button_visible", False):
+                    return False
+                max_bet_attempts = int(getattr(config, "MAX_BET_ATTEMPTS", 2))
+                if self.bet_attempts_in_phase >= max_bet_attempts:
+                    self.log(
+                        f"Bet attempts exhausted ({self.bet_attempts_in_phase}/{max_bet_attempts}); waiting"
+                    )
+                    return False
                 if self.place_bet():
                     self.last_bet_click_at = now
+                    self.bet_attempts_in_phase += 1
                     self.reset_round_cache()
                     return True
                 return False
@@ -763,17 +831,29 @@ class BlackjackBot:
         keyboard.add_hotkey('ctrl+alt+j', _request_stop)
 
         self.running = True
+        self.last_phase = "unknown"
 
         try:
             while self.running and not _stop_requested:
                 action_taken = self.run_once()
 
+                # Adaptive polling: slow when idle, fast when it's our turn.
                 if action_taken:
-                    # Wait longer after taking an action
-                    time.sleep(config.POST_CLICK_DELAY)
+                    # Note: execute_action() performs click verification which already waits for
+                    # animations to settle for hit/stand/double/split. Avoid double-sleeping.
+                    delay = float(getattr(config, "POST_CLICK_DELAY", 0.3))
+                    if self.last_action == "bet":
+                        delay = float(getattr(config, "POST_BET_DELAY", delay))
+                    time.sleep(max(0.0, delay))
                 else:
-                    # Quick scan when waiting
-                    time.sleep(config.SCAN_INTERVAL)
+                    base = float(getattr(config, "SCAN_INTERVAL", 0.1))
+                    if self.last_phase == "player_turn":
+                        base = float(getattr(config, "PLAYER_TURN_SCAN_INTERVAL", base))
+                    elif self.last_phase == "betting":
+                        base = float(getattr(config, "BETTING_SCAN_INTERVAL", base))
+                    elif self.last_phase in ("waiting", "dealer_turn"):
+                        base = float(getattr(config, "WAITING_SCAN_INTERVAL", base))
+                    time.sleep(max(0.02, base))
 
         except KeyboardInterrupt:
             print("\n\nBot stopped by user")

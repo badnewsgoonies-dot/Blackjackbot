@@ -62,6 +62,13 @@ def _get_easyocr_reader(cfg):
         return None
 
 
+# Optional: pydirectinput backend for games that ignore standard SendInput clicks.
+try:
+    import pydirectinput as _pydirectinput  # type: ignore
+except Exception:
+    _pydirectinput = None
+
+
 class ScreenCapture:
     """Handles screen capture functionality."""
 
@@ -1315,8 +1322,10 @@ class GOP3Detector:
         checked, auto_pos = self.detect_auto_bet_checkbox(screen, diag=diag)
         auto_present = (checked is not None) and (auto_pos is not None)
         bet_visible = self.detect_bet_button_visible(screen, diag=diag)
+        use_auto_bet_signal = bool(getattr(self.config, "BETTING_UI_USE_AUTO_BET", False))
+        betting_ui = bool(bet_visible or (use_auto_bet_signal and auto_present))
         return {
-            "betting_ui": bool(auto_present or bet_visible),
+            "betting_ui": betting_ui,
             "auto_bet_checked": checked if auto_present else None,
             "auto_bet_position": auto_pos if auto_present else None,
             "bet_button_visible": bool(bet_visible),
@@ -1379,7 +1388,10 @@ class GOP3Detector:
             if getattr(self.config, 'READ_DEALER_CARD', False):
                 state['dealer_card'] = self.detect_dealer_card(screen)
         else:
-            state['phase'] = 'betting' if state.get('betting_ui', False) else 'waiting'
+            if dealer_total is not None and not state.get('bet_button_visible', False):
+                state['phase'] = 'waiting'
+            else:
+                state['phase'] = 'betting' if state.get('betting_ui', False) else 'waiting'
 
         self._diag_save(diag, json_name="detected_state.json", json_obj=state)
         return state
@@ -1390,9 +1402,30 @@ class GameController:
 
     def __init__(self, click_delay=0.2):
         self.click_delay = click_delay
-        pyautogui.PAUSE = getattr(config, "PYAUTOGUI_PAUSE", 0.1)
         pyautogui.FAILSAFE = True  # Move to corner to abort
         self._last_focus_warn = 0.0
+
+        backend = str(getattr(config, "CLICK_BACKEND", "auto")).strip().lower()
+        if backend not in ("auto", "pyautogui", "pydirectinput"):
+            backend = "auto"
+
+        # Choose clicker implementation.
+        clicker = None
+        clicker_name = "pyautogui"
+        if backend in ("auto", "pydirectinput") and _pydirectinput is not None:
+            clicker = _pydirectinput
+            clicker_name = "pydirectinput"
+            try:
+                clicker.PAUSE = float(getattr(config, "CLICK_BACKEND_PAUSE", 0.02))
+            except Exception:
+                pass
+        else:
+            clicker = pyautogui
+            clicker_name = "pyautogui"
+            pyautogui.PAUSE = getattr(config, "PYAUTOGUI_PAUSE", 0.1)
+
+        self._clicker = clicker
+        self._clicker_name = clicker_name
 
     def _get_foreground_window_title(self) -> str:
         try:
@@ -1438,8 +1471,30 @@ class GameController:
 
     def click(self, x, y):
         """Click at screen coordinates."""
+        # Enforce PyAutoGUI-style failsafe even if using a non-pyautogui clicker.
+        if pyautogui.FAILSAFE:
+            try:
+                mx, my = pyautogui.position()
+                if mx <= 0 and my <= 0:
+                    raise pyautogui.FailSafeException("Fail-safe triggered (mouse in top-left corner).")
+            except Exception:
+                # If we can't read position, keep going (matches pyautogui's best-effort behavior).
+                pass
+
+        # Move before click for games that care about cursor hover/focus.
+        if getattr(config, "CLICK_MOVE_BEFORE_CLICK", False):
+            try:
+                duration = float(getattr(config, "CLICK_MOVE_DURATION", 0.0))
+            except Exception:
+                duration = 0.0
+            try:
+                mover = getattr(self._clicker, "moveTo", None) or pyautogui.moveTo
+                mover(x, y, duration=duration)
+            except Exception:
+                pass
+
         # Direct click for accuracy (no midpoint movement or jitter).
-        pyautogui.click(x, y)
+        self._clicker.click(x, y)
         time.sleep(self.click_delay)
 
     def click_button(self, position):
