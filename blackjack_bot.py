@@ -500,15 +500,17 @@ class BlackjackBot:
         if action not in buttons:
             # Handle fallbacks
             if action == 'double' and 'double' not in buttons:
-                if 'hit' in buttons:
+                if 'hit_bet' in buttons:
                     self.log("Double not available, hitting")
-                    action = 'hit'
+                    action = 'hit_bet'
             elif action == 'split' and 'split' not in buttons:
                 self.log("Split not available")
                 return False
 
-        if action in buttons:
-            pos = self.jitter_button_position(buttons[action])
+        # Map 'hit' to 'hit_bet' button
+        btn_key = 'hit_bet' if action == 'hit' else action
+        if btn_key in buttons:
+            pos = self.jitter_button_position(buttons[btn_key])
             print(f"  -> Clicking {action.upper()} at {pos}")
 
             # Use shorter delay for subsequent hits (1/4 of normal)
@@ -580,8 +582,17 @@ class BlackjackBot:
                 return False
 
         if phase == 'betting':
-            self.log("Betting phase - waiting for manual bet")
-            return False
+            # Auto-click bet using hit_bet position
+            btn_pos = self._button_pos('hit_bet')
+            if btn_pos:
+                self.log(f"Betting phase - clicking bet at {btn_pos}")
+                self.human_delay()
+                self.controller.click_button(btn_pos)
+                self.waiting_for_total_update = True  # Wait for cards
+                return True
+            else:
+                self.log("Betting phase - no hit_bet position configured")
+                return False
 
         elif phase == 'player_turn':
             can_split = state['can_split']

@@ -17,7 +17,7 @@ SCREEN_HEIGHT = 1440
 # These are the exact center positions of each button
 # Adjusted +80 pixels right and -80 pixels up (diagonally up-right)
 BUTTON_POSITIONS = {
-    'hit': (456, 1133),
+    'hit_bet': (456, 1133),  # hit and bet share same position
     'stand': (630, 1131),
     'double': (789, 1129),
     'split': (958, 1130),
@@ -113,7 +113,7 @@ FOCUS_CHECK_LOG_INTERVAL = 1.0
 
 # Action gating: require these buttons to be visible before any action click.
 # This prevents acting on partial/false detections.
-REQUIRE_BUTTONS_FOR_ACTION = ("hit", "stand")
+REQUIRE_BUTTONS_FOR_ACTION = ("hit_bet", "stand")
 
 # Safety cap: stop taking actions if we exceed this many actions in one round.
 # (Helps avoid runaway loops if state is noisy.)
@@ -178,5 +178,5 @@ TOTAL_READ_INTERVAL = 0.05  # Was 0.1
 READ_DEALER_CARD = False
 
 # Temporary safety switches
-DISABLE_SPLIT = False
+DISABLE_SPLIT = True
 FORCE_HARD_HAND = False
