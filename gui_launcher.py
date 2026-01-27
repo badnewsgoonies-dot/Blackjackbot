@@ -182,6 +182,7 @@ class App(tk.Tk):
         ttk.Button(row4, text="Run calibration", command=self._run_calibration).pack(side="left", padx=6)
         ttk.Button(row4, text="Open debugger", command=self._open_debugger).pack(side="left", padx=6)
         ttk.Button(row4, text="Live reader", command=self._open_live_reader).pack(side="left", padx=6)
+        ttk.Button(row4, text="Diagnostic", command=self._open_diagnostic_reader).pack(side="left", padx=6)
 
         self.status = tk.StringVar(value="")
         ttk.Label(self, textvariable=self.status, foreground="#444").pack(fill="x", **pad)
@@ -435,6 +436,12 @@ class App(tk.Tk):
             LiveReaderWindow(self, config_path=CONFIG_PATH)
         except Exception as exc:
             self.status.set(f"Failed to open live reader: {exc}")
+
+    def _open_diagnostic_reader(self):
+        try:
+            DiagnosticReaderWindow(self, config_path=CONFIG_PATH)
+        except Exception as exc:
+            self.status.set(f"Failed to open diagnostic reader: {exc}")
 
     def _append_log(self, text):
         self.log_text.config(state="normal")
@@ -866,6 +873,566 @@ class LiveReaderWindow(tk.Toplevel):
 
         if self._running:
             self.after(150, self._tick)
+
+
+class DiagnosticReaderWindow(tk.Toplevel):
+    """Enhanced diagnostic window - full state vector with stability tracking.
+    
+    Features:
+    - State signature stability (phase + buttons + player_total only)
+    - Instability event capture (saves frame + state + diff on change)
+    - Shows "what is changing" in UI
+    - Confidence gating (rejects out-of-range totals, impossible jumps)
+    - Recording toggle for offline debugging
+    """
+
+    STABILITY_WINDOW = 5  # Frames to track for stability
+    MAX_EVENTS = 200  # Max events to keep on disk
+    VALID_TOTAL_RANGE = (2, 31)  # Valid player total range
+    MAX_JUMP = 11  # Max valid total change in one frame (hit an Ace)
+
+    def __init__(self, parent, *, config_path: Path):
+        super().__init__(parent)
+        self.title("Diagnostic Reader")
+        self.geometry("480x480")
+        self.attributes("-topmost", True)
+        self.config_path = config_path
+        self.detector = None
+        self._load_error = None
+        self._running = True
+
+        # State history for stability tracking
+        self._history = []  # List of (signature, full_state, screen) tuples
+        self._frame_count = 0
+        self._start_time = time.time()
+        self._last_signature = None
+        self._last_stable_signature = None
+        self._events_dir = Path("diagnostics/events")
+        self._recording = False
+        self._event_count = 0
+
+        # Try to load detector
+        try:
+            from screen_capture import GOP3Detector
+            self.detector = GOP3Detector(load_config())
+        except Exception as exc:
+            self._load_error = str(exc)
+
+        self._build_ui()
+        self._tick()
+
+    def _build_ui(self):
+        pad = {"padx": 10, "pady": 3}
+
+        # Header
+        header = ttk.Frame(self)
+        header.pack(fill="x", padx=10, pady=6)
+        self.frame_var = tk.StringVar(value="Frame: 0 | FPS: --")
+        ttk.Label(header, textvariable=self.frame_var, font=("Consolas", 9)).pack(side="left")
+        self.stability_var = tk.StringVar(value="Stability: --")
+        ttk.Label(header, textvariable=self.stability_var, font=("Consolas", 9, "bold")).pack(side="right")
+
+        ttk.Separator(self, orient="horizontal").pack(fill="x", padx=10, pady=4)
+
+        # State section
+        state_frame = ttk.LabelFrame(self, text="Detected State")
+        state_frame.pack(fill="x", padx=10, pady=4)
+
+        self.phase_var = tk.StringVar(value="Phase: --")
+        ttk.Label(state_frame, textvariable=self.phase_var, font=("Consolas", 12, "bold")).pack(anchor="w", **pad)
+
+        totals_row = ttk.Frame(state_frame)
+        totals_row.pack(fill="x", **pad)
+        self.player_var = tk.StringVar(value="Player: --")
+        self.dealer_var = tk.StringVar(value="Dealer: --")
+        ttk.Label(totals_row, textvariable=self.player_var, font=("Consolas", 11)).pack(side="left", padx=(0, 20))
+        ttk.Label(totals_row, textvariable=self.dealer_var, font=("Consolas", 11)).pack(side="left")
+
+        # Confidence indicator
+        self.confidence_var = tk.StringVar(value="Confidence: --")
+        ttk.Label(state_frame, textvariable=self.confidence_var, font=("Consolas", 10)).pack(anchor="w", **pad)
+
+        # Buttons section
+        btn_frame = ttk.LabelFrame(self, text="Button Visibility")
+        btn_frame.pack(fill="x", padx=10, pady=4)
+
+        self.btn_vars = {}
+        btn_row = ttk.Frame(btn_frame)
+        btn_row.pack(fill="x", **pad)
+        for btn_name in ["hit_bet", "stand", "double", "split"]:
+            var = tk.StringVar(value=f"{btn_name}: ?")
+            self.btn_vars[btn_name] = var
+            ttk.Label(btn_row, textvariable=var, font=("Consolas", 10)).pack(side="left", padx=6)
+
+        # Change indicator
+        self.change_var = tk.StringVar(value="Changes: --")
+        ttk.Label(self, textvariable=self.change_var, font=("Consolas", 10), foreground="red").pack(anchor="w", padx=10, pady=2)
+
+        # History section
+        hist_frame = ttk.LabelFrame(self, text=f"Last {self.STABILITY_WINDOW} Signatures")
+        hist_frame.pack(fill="both", expand=True, padx=10, pady=4)
+
+        self.hist_text = tk.Text(hist_frame, height=6, font=("Consolas", 9), state="disabled", wrap="none")
+        self.hist_text.pack(fill="both", expand=True, padx=4, pady=4)
+
+        # Recording status
+        self.record_var = tk.StringVar(value="Recording: OFF")
+        ttk.Label(self, textvariable=self.record_var, font=("Consolas", 9)).pack(anchor="w", padx=10)
+
+        # Controls
+        ctrl_frame = ttk.Frame(self)
+        ctrl_frame.pack(fill="x", padx=10, pady=6)
+        ttk.Button(ctrl_frame, text="Reset", command=self._reset).pack(side="left")
+        self.record_btn = ttk.Button(ctrl_frame, text="Start Recording", command=self._toggle_recording)
+        self.record_btn.pack(side="left", padx=6)
+        ttk.Button(ctrl_frame, text="Snapshot", command=self._save_stable_snapshot).pack(side="left", padx=6)
+        ttk.Button(ctrl_frame, text="Open Events", command=self._open_events_folder).pack(side="left", padx=6)
+        ttk.Button(ctrl_frame, text="Close", command=self._on_close).pack(side="right")
+
+        if self._load_error:
+            ttk.Label(self, text=f"Error: {self._load_error}", foreground="red").pack(padx=10, pady=4)
+
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _reset(self):
+        self._history.clear()
+        self._frame_count = 0
+        self._start_time = time.time()
+        self._last_signature = None
+        self._last_stable_signature = None
+
+    def _toggle_recording(self):
+        self._recording = not self._recording
+        if self._recording:
+            self._events_dir.mkdir(parents=True, exist_ok=True)
+            self.record_btn.config(text="Stop Recording")
+            self.record_var.set(f"Recording: ON -> {self._events_dir}")
+        else:
+            self.record_btn.config(text="Start Recording")
+            self.record_var.set("Recording: OFF")
+
+    def _open_events_folder(self):
+        self._events_dir.mkdir(parents=True, exist_ok=True)
+        if sys.platform == "win32":
+            os.startfile(str(self._events_dir))
+
+    def _on_close(self):
+        self._running = False
+        self.destroy()
+
+    def _make_signature(self, state: dict) -> tuple:
+        """Create a stability signature from state.
+        
+        Signature includes: phase, button mask, player_total (not dealer, not soft).
+        This is intentionally small to avoid noise from unreliable fields.
+        """
+        phase = state.get("phase", "unknown")
+        buttons = state.get("buttons", {})
+        btn_mask = tuple(sorted(buttons.keys()))
+        player_total = state.get("player_total")
+        return (phase, btn_mask, player_total)
+
+    def _validate_total(self, total, prev_total) -> tuple:
+        """Validate a total reading. Returns (is_valid, reason)."""
+        if total is None:
+            return (True, "none")  # None is valid
+        if not isinstance(total, int):
+            return (False, "not_int")
+        if total < self.VALID_TOTAL_RANGE[0] or total > self.VALID_TOTAL_RANGE[1]:
+            return (False, f"out_of_range:{total}")
+        if prev_total is not None and abs(total - prev_total) > self.MAX_JUMP:
+            return (False, f"jump:{prev_total}->{total}")
+        return (True, "ok")
+
+    def _compute_diff(self, old_sig, new_sig) -> list:
+        """Compute what changed between two signatures."""
+        if old_sig is None:
+            return ["initial"]
+        changes = []
+        if old_sig[0] != new_sig[0]:
+            changes.append(f"phase:{old_sig[0]}->{new_sig[0]}")
+        if old_sig[1] != new_sig[1]:
+            old_btns = set(old_sig[1])
+            new_btns = set(new_sig[1])
+            added = new_btns - old_btns
+            removed = old_btns - new_btns
+            if added:
+                changes.append(f"+btns:{','.join(added)}")
+            if removed:
+                changes.append(f"-btns:{','.join(removed)}")
+        if old_sig[2] != new_sig[2]:
+            changes.append(f"player:{old_sig[2]}->{new_sig[2]}")
+        return changes if changes else ["no_change"]
+
+    def _save_event(self, screen, state: dict, signature: tuple, diff: list, reason: str = "change", force: bool = False):
+        """Save an instability event to disk with ROI crops, meta, and tight circle crop."""
+        if not self._recording and not force:
+            return
+        import cv2
+        import hashlib
+        
+        timestamp = time.strftime("%Y-%m-%d_%H-%M-%S")
+        timestamp_ms = int(time.time() * 1000)
+        prefix = "stable" if reason == "snapshot" else "event"
+        event_dir = self._events_dir / f"{prefix}_{timestamp}_{self._event_count:04d}"
+        event_dir.mkdir(parents=True, exist_ok=True)
+        self._event_count += 1
+
+        h, w = screen.shape[:2]
+
+        # Save full frame
+        cv2.imwrite(str(event_dir / "frame.png"), screen)
+
+        # Get ROI rectangles and save crops
+        rois = self._get_roi_rectangles(screen)
+        
+        for roi_name, rect in rois.items():
+            if rect:
+                x1, y1, x2, y2 = rect
+                roi_img = screen[y1:y2, x1:x2]
+                if roi_img.size > 0:
+                    cv2.imwrite(str(event_dir / f"roi_{roi_name}.png"), roi_img)
+
+        # Save tight blue circle crop (for player total)
+        circle_rect = self._find_blue_circle_tight(screen, rois.get("player_total"))
+        if circle_rect:
+            cx1, cy1, cx2, cy2 = circle_rect
+            circle_img = screen[cy1:cy2, cx1:cx2]
+            if circle_img.size > 0:
+                cv2.imwrite(str(event_dir / "roi_player_circle_tight.png"), circle_img)
+            rois["player_circle_tight"] = circle_rect
+
+        # Build signature strings
+        sig_str = self._signature_to_string(signature)
+        prev_sig_str = self._signature_to_string(self._last_signature) if self._last_signature else None
+
+        # Determine change reason
+        change_reasons = []
+        if diff:
+            for d in diff:
+                if "phase:" in d:
+                    change_reasons.append("phase_change")
+                elif "btns:" in d:
+                    change_reasons.append("button_mask_change")
+                elif "player:" in d:
+                    change_reasons.append("player_total_change")
+
+        # Save meta.json
+        meta = {
+            "timestamp": timestamp,
+            "timestamp_ms": timestamp_ms,
+            "frame": self._frame_count,
+            "fps": self._frame_count / (time.time() - self._start_time) if (time.time() - self._start_time) > 0 else 0,
+            "screen_w": w,
+            "screen_h": h,
+            "window_title": self._get_foreground_title(),
+            "calibration_status": self._get_calibration_status(),
+            "config_hash": self._get_config_hash(),
+            "reason": reason,
+        }
+        with open(event_dir / "meta.json", "w") as f:
+            json.dump(meta, f, indent=2)
+
+        # Save state with ROI rectangles
+        state_copy = dict(state)
+        state_copy["buttons"] = {k: list(v) for k, v in state.get("buttons", {}).items()}
+        state_copy["roi_rectangles"] = {k: list(v) if v else None for k, v in rois.items()}
+        with open(event_dir / "state.json", "w") as f:
+            json.dump(state_copy, f, indent=2)
+
+        # Save diff with compact signatures and reasons
+        with open(event_dir / "diff.json", "w") as f:
+            json.dump({
+                "sig_before": prev_sig_str,
+                "sig_after": sig_str,
+                "changes": diff,
+                "change_reasons": change_reasons if change_reasons else ["unknown"],
+                "frame": self._frame_count,
+                "timestamp": timestamp,
+            }, f, indent=2)
+
+        # Cleanup old events
+        self._cleanup_old_events()
+
+    def _signature_to_string(self, sig: tuple) -> str:
+        """Convert signature tuple to compact string like 'player_turn|0b1111|17'."""
+        if not sig:
+            return "None"
+        phase = sig[0] if sig[0] else "?"
+        # Convert button tuple to bitmask: hit_bet=1, stand=2, double=4, split=8
+        btn_order = ["hit_bet", "stand", "double", "split"]
+        mask = 0
+        if sig[1]:
+            for i, btn in enumerate(btn_order):
+                if btn in sig[1]:
+                    mask |= (1 << i)
+        player = sig[2] if sig[2] is not None else "?"
+        return f"{phase}|0b{mask:04b}|{player}"
+
+    def _find_blue_circle_tight(self, screen, player_roi_rect) -> tuple:
+        """Find tight bounding box around the blue circle in player total region."""
+        if not player_roi_rect:
+            return None
+        try:
+            import cv2
+            import numpy as np
+            
+            x1, y1, x2, y2 = player_roi_rect
+            roi = screen[y1:y2, x1:x2]
+            if roi.size == 0:
+                return None
+                
+            hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+            config = self.detector.config if self.detector else None
+            lower = np.array(getattr(config, 'BLUE_CIRCLE_HSV_LOWER', (70, 30, 40)) if config else (70, 30, 40))
+            upper = np.array(getattr(config, 'BLUE_CIRCLE_HSV_UPPER', (140, 255, 255)) if config else (140, 255, 255))
+            mask = cv2.inRange(hsv, lower, upper)
+            
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if not contours:
+                return None
+                
+            # Find largest contour
+            largest = max(contours, key=cv2.contourArea)
+            bx, by, bw, bh = cv2.boundingRect(largest)
+            
+            # Convert back to screen coordinates
+            return (x1 + bx, y1 + by, x1 + bx + bw, y1 + by + bh)
+        except Exception:
+            return None
+
+    def _get_foreground_title(self) -> str:
+        """Get current foreground window title."""
+        try:
+            return get_foreground_window_title()
+        except Exception:
+            return "unknown"
+
+    def _get_calibration_status(self) -> str:
+        """Get auto-calibration status."""
+        try:
+            if self.detector and hasattr(self.detector, 'auto_cal'):
+                transform = getattr(self.detector.auto_cal, 'transform', None)
+                if transform:
+                    return f"ok_scale_{transform.scale:.3f}"
+            return "no_transform"
+        except Exception:
+            return "error"
+
+    def _get_config_hash(self) -> str:
+        """Get a short hash of current config for drift detection."""
+        try:
+            config = self.detector.config if self.detector else None
+            if not config:
+                return "no_config"
+            # Hash key config values
+            key_vals = [
+                str(getattr(config, 'PLAYER_TOTAL_REGION', '')),
+                str(getattr(config, 'BUTTON_POSITIONS', '')),
+                str(getattr(config, 'SCREEN_WIDTH', '')),
+                str(getattr(config, 'SCREEN_HEIGHT', '')),
+            ]
+            import hashlib
+            return hashlib.md5("|".join(key_vals).encode()).hexdigest()[:8]
+        except Exception:
+            return "error"
+
+    def _save_stable_snapshot(self):
+        """Manually save a snapshot of current stable state (for baseline dataset)."""
+        if not self.detector or not self._history:
+            return
+        try:
+            import mss
+            import numpy as np
+            import cv2
+            
+            with mss.mss() as sct:
+                monitor = sct.monitors[1]
+                shot = sct.grab(monitor)
+                img = np.array(shot)
+                screen = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+            
+            state = self.detector.detect_game_state(screen)
+            signature = self._make_signature(state)
+            self._events_dir.mkdir(parents=True, exist_ok=True)
+            self._save_event(screen, state, signature, ["manual_snapshot"], reason="snapshot", force=True)
+            self.record_var.set(f"Snapshot saved: event {self._event_count - 1}")
+        except Exception as e:
+            self.record_var.set(f"Snapshot failed: {e}")
+
+    def _get_roi_rectangles(self, screen) -> dict:
+        """Get ROI rectangles for player_total, dealer_total, and buttons."""
+        rois = {
+            "player_total": None,
+            "dealer_total": None,
+            "buttons": None,
+        }
+        
+        if not self.detector:
+            return rois
+            
+        try:
+            config = self.detector.config
+            h, w = screen.shape[:2]
+            
+            # Player total region
+            region = getattr(config, 'PLAYER_TOTAL_REGION', None)
+            if region:
+                rois["player_total"] = self._percent_region_to_rect(region, w, h)
+            
+            # Dealer total region
+            region = getattr(config, 'DEALER_TOTAL_REGION', None)
+            if not region:
+                region = getattr(config, 'DEALER_CARD_REGION', None)
+            if region:
+                rois["dealer_total"] = self._percent_region_to_rect(region, w, h)
+            
+            # Button detection region
+            region = getattr(config, 'BUTTON_DETECT_REGION', None)
+            if region:
+                rois["buttons"] = self._percent_region_to_rect(region, w, h)
+                
+        except Exception:
+            pass
+            
+        return rois
+
+    def _percent_region_to_rect(self, region: dict, w: int, h: int) -> tuple:
+        """Convert a percent-based region to (x1, y1, x2, y2) rectangle."""
+        x_pct = region.get('x_percent', (0, 1))
+        y_pct = region.get('y_percent', (0, 1))
+        # Handle both tuple and list formats
+        if isinstance(x_pct, (list, tuple)) and len(x_pct) >= 2:
+            x1 = int(w * x_pct[0])
+            x2 = int(w * x_pct[1])
+        else:
+            x1, x2 = 0, w
+        if isinstance(y_pct, (list, tuple)) and len(y_pct) >= 2:
+            y1 = int(h * y_pct[0])
+            y2 = int(h * y_pct[1])
+        else:
+            y1, y2 = 0, h
+        return (x1, y1, x2, y2)
+
+    def _cleanup_old_events(self):
+        """Keep only last MAX_EVENTS events."""
+        try:
+            events = sorted(self._events_dir.iterdir())
+            if len(events) > self.MAX_EVENTS:
+                for old in events[:-self.MAX_EVENTS]:
+                    if old.is_dir():
+                        import shutil
+                        shutil.rmtree(old)
+        except Exception:
+            pass
+
+    def _compute_stability(self) -> tuple:
+        """Compute stability metrics from signature history."""
+        if len(self._history) < self.STABILITY_WINDOW:
+            return (False, f"need {self.STABILITY_WINDOW - len(self._history)} more")
+
+        recent_sigs = [h[0] for h in self._history[-self.STABILITY_WINDOW:]]
+        if len(set(recent_sigs)) > 1:
+            # Find what's changing
+            first = recent_sigs[0]
+            for sig in recent_sigs[1:]:
+                if sig != first:
+                    diff = self._compute_diff(first, sig)
+                    return (False, " ".join(diff[:2]))
+            return (False, "unstable")
+
+        return (True, "STABLE")
+
+    def _tick(self):
+        if not self._running:
+            return
+
+        self._frame_count += 1
+        elapsed = time.time() - self._start_time
+        fps = self._frame_count / elapsed if elapsed > 0 else 0
+
+        if self.detector:
+            try:
+                import mss
+                import numpy as np
+                import cv2
+
+                with mss.mss() as sct:
+                    monitor = sct.monitors[1]
+                    shot = sct.grab(monitor)
+                    img = np.array(shot)
+                    screen = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+
+                state = self.detector.detect_game_state(screen)
+                signature = self._make_signature(state)
+
+                # Validate player total
+                prev_player = self._history[-1][1].get("player_total") if self._history else None
+                is_valid, valid_reason = self._validate_total(state.get("player_total"), prev_player)
+
+                # Compute diff from last frame
+                diff = self._compute_diff(self._last_signature, signature)
+
+                # Record if signature changed and recording is on
+                if self._last_signature is not None and signature != self._last_signature:
+                    self._save_event(screen, state, signature, diff)
+
+                # Update history
+                self._history.append((signature, state, None))  # Don't store screen in memory
+                if len(self._history) > self.STABILITY_WINDOW * 2:
+                    self._history = self._history[-self.STABILITY_WINDOW * 2:]
+                self._last_signature = signature
+
+                # Update displays
+                pt = state.get("player_total")
+                dt = state.get("dealer_total")
+                soft = state.get("is_soft", False)
+                phase = state.get("phase", "unknown")
+                buttons = state.get("buttons", {})
+
+                pt_str = f"{'S' if soft else 'H'}{pt}" if pt is not None else "--"
+                dt_str = str(dt) if dt is not None else "--"
+
+                self.frame_var.set(f"Frame: {self._frame_count} | FPS: {fps:.1f}")
+                self.phase_var.set(f"Phase: {phase}")
+                self.player_var.set(f"Player: {pt_str}")
+                self.dealer_var.set(f"Dealer: {dt_str}")
+                self.confidence_var.set(f"Confidence: {valid_reason}")
+
+                for btn_name, var in self.btn_vars.items():
+                    if btn_name in buttons:
+                        var.set(f"{btn_name}: OK")
+                    else:
+                        var.set(f"{btn_name}: --")
+
+                # Show changes
+                if diff and diff != ["no_change"] and diff != ["initial"]:
+                    self.change_var.set(f"Changes: {' | '.join(diff)}")
+                else:
+                    self.change_var.set("Changes: --")
+
+                # Stability
+                is_stable, reason = self._compute_stability()
+                self.stability_var.set(f"Stability: {reason}")
+                if is_stable:
+                    self._last_stable_signature = signature
+
+                # History display
+                self.hist_text.config(state="normal")
+                self.hist_text.delete("1.0", "end")
+                for i, (sig, st, _) in enumerate(self._history[-self.STABILITY_WINDOW:]):
+                    phase_s = sig[0][:7] if sig[0] else "?"
+                    btns_s = ",".join(sig[1])[:15] if sig[1] else "--"
+                    pt_s = sig[2] if sig[2] is not None else "--"
+                    line = f"{i+1}: {phase_s:8} btns=[{btns_s:15}] P:{pt_s}\n"
+                    self.hist_text.insert("end", line)
+                self.hist_text.config(state="disabled")
+
+            except Exception as e:
+                self.phase_var.set(f"Error: {e}")
+
+        if self._running:
+            self.after(100, self._tick)
 
 
 def run_bot_mode(args):
