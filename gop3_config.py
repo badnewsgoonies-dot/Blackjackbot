@@ -7,7 +7,11 @@ Screen resolution: 3440x1440
 GAME_WINDOW = None
 
 # Foreground window title substring required for clicking (set to None to disable)
-GAME_WINDOW_TITLE = "Governor of Poker 3"
+GAME_WINDOW_TITLE = "GOP3"
+
+# Capture only the game window rect (recommended if you run windowed or multi-monitor).
+# If enabled, the detector will try to find a visible window whose title contains GAME_WINDOW_TITLE.
+USE_WINDOW_CAPTURE = False
 
 # Screen resolution (for reference)
 SCREEN_WIDTH = 3200
@@ -104,9 +108,15 @@ CLICK_VERIFY_ENABLED = True
 CLICK_VERIFY_TIMEOUT = 0.7
 CLICK_VERIFY_INTERVAL = 0.08
 CLICK_VERIFY_STABLE_COUNT = 2
-CLICK_VERIFY_RETRIES = 0
-CLICK_VERIFY_RETRY_ACTIONS = ("stand",)
 CLICK_VERIFY_LOG = True
+
+# What to do if click verification fails:
+# - "retry": retry up to CLICK_VERIFY_MAX_RETRIES, then fall back to CLICK_VERIFY_FALLBACK
+# - "skip": treat as no-op (do not advance internal state)
+# - "stop": stop the bot
+CLICK_VERIFY_ON_FAIL = "retry"   # "retry" | "skip" | "stop"
+CLICK_VERIFY_MAX_RETRIES = 2
+CLICK_VERIFY_FALLBACK = "skip"  # used when CLICK_VERIFY_ON_FAIL="retry"
 
 # Diagnostics dump (opt-in).
 # When enabled, the bot will save per-iteration screenshots/ROIs/JSON into DIAGNOSTICS_DIR.
@@ -124,9 +134,25 @@ FOCUS_CHECK_LOG_INTERVAL = 1.0
 # This prevents acting on partial/false detections.
 REQUIRE_BUTTONS_FOR_ACTION = ("hit", "stand")
 
+# Dealing grace period (seconds): after a bet click, cards/totals may animate in.
+# During this time, the bot should not assume missing buttons/totals means "betting".
+DEALING_GRACE_SEC = 2.0
+
 # Safety cap: stop taking actions if we exceed this many actions in one round.
 # (Helps avoid runaway loops if state is noisy.)
 MAX_ACTIONS_PER_ROUND = 12
+
+# Prefer dynamic button detection (contours/HSV) over fixed coordinates.
+PREFER_DYNAMIC_BUTTONS = True
+
+# Optional betting UI detection (used to distinguish betting vs waiting/result):
+# If not set, defaults to action button HSV thresholds.
+BET_BUTTON_HSV_LOWER = BUTTON_COLOR_HSV_LOWER
+BET_BUTTON_HSV_UPPER = BUTTON_COLOR_HSV_UPPER
+BET_BUTTON_HSV_LOWER2 = BUTTON_COLOR_HSV_LOWER2
+BET_BUTTON_HSV_UPPER2 = BUTTON_COLOR_HSV_UPPER2
+BET_VALIDATE_RADIUS = 18
+BET_VALIDATE_THRESHOLD = 0.20
 
 # Original human-like settings (uncomment to re-enable):
 # DECISION_DELAY = 0.8

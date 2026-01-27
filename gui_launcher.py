@@ -110,7 +110,17 @@ def write_config_value(
 
 def _python_executable() -> str:
     if not getattr(sys, "frozen", False):
-        return sys.executable
+        exe = sys.executable
+        # If the GUI is launched via pythonw.exe, spawning scripts with CREATE_NEW_CONSOLE
+        # will not show a console. Prefer python.exe when available.
+        try:
+            if exe.lower().endswith("pythonw.exe"):
+                cand = str(Path(exe).with_name("python.exe"))
+                if Path(cand).exists():
+                    return cand
+        except Exception:
+            pass
+        return exe
     return os.environ.get("PYTHON", "python")
 
 

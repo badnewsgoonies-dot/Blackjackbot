@@ -50,21 +50,107 @@ class ScreenCapture:
     def __init__(self):
         self.sct = mss.mss()
 
-    def capture_screen(self, region=None):
-        """Capture screen or specific region. Returns BGR numpy array."""
+    def capture_screen_with_origin(self, region=None):
+        """
+        Capture screen or specific region.
+
+        Returns:
+            (img_bgr, (origin_left, origin_top))
+
+        Notes:
+            - When capturing a monitor/region that is not at (0,0) in the virtual desktop,
+              origin is required to map frame coordinates back to absolute screen coordinates
+              for mouse clicking.
+        """
         if region:
             monitor = {
                 "left": region[0],
                 "top": region[1],
                 "width": region[2],
-                "height": region[3]
+                "height": region[3],
             }
         else:
             monitor = self.sct.monitors[1]  # Primary monitor
 
         screenshot = self.sct.grab(monitor)
         img = np.array(screenshot)
-        return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+        bgr = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+        return bgr, (int(monitor.get("left", 0)), int(monitor.get("top", 0)))
+
+    def capture_screen(self, region=None):
+        """Capture screen or specific region. Returns BGR numpy array."""
+        bgr, _origin = self.capture_screen_with_origin(region)
+        return bgr
+
+    def capture_window_by_title(self, title_substring: str):
+        """
+        Capture a window's client area by matching a substring in its title (Windows only).
+
+        Returns:
+            (img_bgr, (origin_left, origin_top)) or (None, None) if not found.
+        """
+        if not title_substring:
+            return (None, None)
+
+        user32 = ctypes.windll.user32
+
+        class RECT(ctypes.Structure):
+            _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long), ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+        class POINT(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+        GetWindowTextLengthW = user32.GetWindowTextLengthW
+        GetWindowTextW = user32.GetWindowTextW
+        IsWindowVisible = user32.IsWindowVisible
+        GetClientRect = user32.GetClientRect
+        ClientToScreen = user32.ClientToScreen
+
+        matches = []
+
+        @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+        def enum_proc(hwnd, lparam):
+            try:
+                if not IsWindowVisible(hwnd):
+                    return True
+                length = GetWindowTextLengthW(hwnd)
+                if length <= 0:
+                    return True
+                buf = ctypes.create_unicode_buffer(length + 1)
+                GetWindowTextW(hwnd, buf, length + 1)
+                title = buf.value or ""
+                if title_substring.lower() not in title.lower():
+                    return True
+
+                rect = RECT()
+                if not GetClientRect(hwnd, ctypes.byref(rect)):
+                    return True
+                w = int(rect.right - rect.left)
+                h = int(rect.bottom - rect.top)
+                if w <= 0 or h <= 0:
+                    return True
+
+                pt = POINT(0, 0)
+                if not ClientToScreen(hwnd, ctypes.byref(pt)):
+                    return True
+                matches.append((int(hwnd), int(pt.x), int(pt.y), w, h, title))
+            except Exception:
+                pass
+            return True
+
+        try:
+            user32.EnumWindows(enum_proc, 0)
+        except Exception:
+            return (None, None)
+
+        if not matches:
+            return (None, None)
+
+        # If multiple match, prefer the largest client area.
+        matches.sort(key=lambda m: (m[3] * m[4]), reverse=True)
+        _hwnd, left, top, width, height, _title = matches[0]
+        img, origin = self.capture_screen_with_origin((left, top, width, height))
+        return img, origin
 
     def save_screenshot(self, filename="screenshot.png", region=None):
         """Save a screenshot for debugging."""
@@ -79,6 +165,7 @@ class GOP3Detector:
     def __init__(self, config):
         self.config = config
         self.capture = ScreenCapture()
+        self.last_capture_origin = (0, 0)  # (left, top) of the last captured frame in virtual screen coords
         self.tesseract_available = TESSERACT_AVAILABLE
         self.digit_templates = {}
         self.template_ready = False
@@ -93,9 +180,32 @@ class GOP3Detector:
 
     def capture_game(self):
         """Capture the game screen."""
-        if self.config.GAME_WINDOW:
-            return self.capture.capture_screen(self.config.GAME_WINDOW)
-        return self.capture.capture_screen()
+        # 1) Prefer window capture by title (more robust for multi-monitor/windowed play)
+        if getattr(self.config, "USE_WINDOW_CAPTURE", False):
+            title = getattr(self.config, "GAME_WINDOW_TITLE", None) or ""
+            img, origin = self.capture.capture_window_by_title(str(title))
+            if img is not None and origin is not None:
+                self.last_capture_origin = origin
+                return img
+
+        # 2) Explicit region capture (legacy)
+        if getattr(self.config, "GAME_WINDOW", None):
+            img, origin = self.capture.capture_screen_with_origin(self.config.GAME_WINDOW)
+            self.last_capture_origin = origin
+            return img
+
+        # 3) Primary monitor capture (with origin tracking for virtual desktop offsets)
+        img, origin = self.capture.capture_screen_with_origin()
+        self.last_capture_origin = origin
+        return img
+
+    def _frame_to_screen(self, pt):
+        ox, oy = self.last_capture_origin
+        return (int(pt[0] + ox), int(pt[1] + oy))
+
+    def _screen_to_frame(self, pt):
+        ox, oy = self.last_capture_origin
+        return (int(pt[0] - ox), int(pt[1] - oy))
 
     def _diag_save(
         self,
@@ -170,7 +280,15 @@ class GOP3Detector:
 
         return thresh
 
-    def _detect_blue_circle_total(self, roi, diag: Optional["DiagnosticIteration"] = None, tag: str = "total") -> tuple:
+    def _detect_blue_circle_total(
+        self,
+        roi,
+        diag: Optional["DiagnosticIteration"] = None,
+        tag: str = "total",
+        *,
+        min_total: int = 4,
+        max_total: int = 21,
+    ) -> tuple:
         """
         Detect a hand total from a blue circle indicator within a ROI.
         Returns (total, is_soft) or (None, False) if not detected.
@@ -298,19 +416,9 @@ class GOP3Detector:
                             json_obj={"text": text},
                         )
 
-                # Check for soft hand format: "low/high" (e.g., "10/20")
-                soft_match = re.match(r'(\d+)/(\d+)', text)
-                if soft_match:
-                    high_total = int(soft_match.group(2))
-                    if 12 <= high_total <= 21:
-                        return (high_total, True)
-
-                # Hard hand: just a single number
-                numbers = re.findall(r'\d+', text)
-                if numbers:
-                    total = int(numbers[0])
-                    if 4 <= total <= 21:
-                        return (total, False)
+                total, is_soft = self._parse_total_text(text, min_total=min_total, max_total=max_total)
+                if total is not None:
+                    return (total, is_soft)
             except Exception:
                 pass
 
@@ -532,8 +640,8 @@ class GOP3Detector:
 
         return best_char, best_score
 
-    def _parse_total_text(self, text: str) -> tuple:
-        """Parse raw total text into (total, is_soft)."""
+    def _parse_total_text(self, text: str, *, min_total: int = 4, max_total: int = 21) -> tuple:
+        """Parse raw total text into (total, is_soft) with bounds checking."""
         clean = re.sub(r'[^0-9/]', '', text or '')
         if not clean:
             return (None, False)
@@ -541,16 +649,16 @@ class GOP3Detector:
             parts = clean.split('/')
             if len(parts) >= 2 and parts[1].isdigit():
                 total = int(parts[1])
-                if 4 <= total <= 21:
+                if min_total <= total <= max_total:
                     return (total, True)
             return (None, False)
         if clean.isdigit():
             total = int(clean)
-            if 4 <= total <= 21:
+            if min_total <= total <= max_total:
                 return (total, False)
         return (None, False)
 
-    def _detect_blue_circle_total_template(self, roi) -> tuple:
+    def _detect_blue_circle_total_template(self, roi, *, min_total: int = 4, max_total: int = 21) -> tuple:
         """Detect totals using template matching."""
         if not self.digit_templates:
             return (None, False)
@@ -577,7 +685,7 @@ class GOP3Detector:
             chars.append(char)
 
         text = ''.join(chars)
-        return self._parse_total_text(text)
+        return self._parse_total_text(text, min_total=min_total, max_total=max_total)
 
     def _learn_templates_from_circle(self, circle_roi, text):
         """Add templates from a labeled circle ROI."""
@@ -667,7 +775,7 @@ class GOP3Detector:
             json_obj={"x1": x1, "y1": y1, "x2": x2, "y2": y2},
         )
         if getattr(self.config, 'TOTAL_READ_MODE', 'ocr') == 'template':
-            total, is_soft = self._detect_blue_circle_total_template(roi)
+            total, is_soft = self._detect_blue_circle_total_template(roi, min_total=4, max_total=21)
             if total is not None:
                 return (total, is_soft)
             if not getattr(self.config, 'TEMPLATE_FALLBACK_TO_OCR', True):
@@ -677,10 +785,10 @@ class GOP3Detector:
                 self._diag_save(diag, image_name="player_total_circle_roi.png", image=circle_roi)
                 text = self._ocr_text_from_circle(circle_roi, diag=diag, tag="player_total_circle")
                 self._learn_templates_from_circle(circle_roi, text)
-                total, is_soft = self._parse_total_text(text)
+                total, is_soft = self._parse_total_text(text, min_total=4, max_total=21)
                 if total is not None:
                     return (total, is_soft)
-        return self._detect_blue_circle_total(roi, diag=diag, tag="player_total")
+        return self._detect_blue_circle_total(roi, diag=diag, tag="player_total", min_total=4, max_total=21)
 
     def detect_dealer_total(self, screen, diag: Optional["DiagnosticIteration"] = None) -> int:
         """
@@ -706,7 +814,7 @@ class GOP3Detector:
             json_obj={"x1": x1, "y1": y1, "x2": x2, "y2": y2},
         )
         if getattr(self.config, 'TOTAL_READ_MODE', 'ocr') == 'template':
-            total, _ = self._detect_blue_circle_total_template(roi)
+            total, _ = self._detect_blue_circle_total_template(roi, min_total=2, max_total=11)
             if total is not None:
                 return total
             if not getattr(self.config, 'TEMPLATE_FALLBACK_TO_OCR', True):
@@ -716,10 +824,10 @@ class GOP3Detector:
                 self._diag_save(diag, image_name="dealer_total_circle_roi.png", image=circle_roi)
                 text = self._ocr_text_from_circle(circle_roi, diag=diag, tag="dealer_total_circle")
                 self._learn_templates_from_circle(circle_roi, text)
-                total, _ = self._parse_total_text(text)
+                total, _ = self._parse_total_text(text, min_total=2, max_total=11)
                 if total is not None:
                     return total
-        total, _ = self._detect_blue_circle_total(roi, diag=diag, tag="dealer_total")
+        total, _ = self._detect_blue_circle_total(roi, diag=diag, tag="dealer_total", min_total=2, max_total=11)
         return total
 
     def detect_player_card_total(self, screen, diag: Optional["DiagnosticIteration"] = None) -> tuple:
@@ -889,89 +997,102 @@ class GOP3Detector:
         """
         Get button positions.
 
-        Uses fixed positions from config since buttons are always in the same place.
-
         Returns:
-            Dict of button_name -> (x, y) center position
+            Dict of button_name -> (x, y) center position in *screen* coordinates.
         """
-        # Use fixed button positions from config
-        if hasattr(self.config, 'USE_FIXED_BUTTONS') and self.config.USE_FIXED_BUTTONS:
-            positions = dict(self.config.BUTTON_POSITIONS)
-            if not getattr(self.config, 'ENABLE_BUTTON_COLOR_VALIDATION', False):
-                return positions
+        prefer_dynamic = bool(getattr(self.config, "PREFER_DYNAMIC_BUTTONS", False))
+        use_fixed = bool(getattr(self.config, "USE_FIXED_BUTTONS", False))
+        validate_fixed = bool(getattr(self.config, "ENABLE_BUTTON_COLOR_VALIDATION", False))
+        split_disabled = bool(getattr(self.config, "DISABLE_SPLIT", False))
 
-            # Try dynamic detection in the button region to correct offsets
-            region = getattr(self.config, 'BUTTON_DETECT_REGION', None)
-            if region:
-                h, w = screen.shape[:2]
-                rx1 = int(w * region['x_percent'][0])
-                rx2 = int(w * region['x_percent'][1])
-                ry1 = int(h * region['y_percent'][0])
-                ry2 = int(h * region['y_percent'][1])
+        fixed_positions = dict(getattr(self.config, "BUTTON_POSITIONS", {})) if use_fixed else {}
 
-                roi = screen[ry1:ry2, rx1:rx2]
-                if roi.size != 0:
-                    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-                    lower1 = np.array(getattr(self.config, 'BUTTON_COLOR_HSV_LOWER', (0, 120, 80)))
-                    upper1 = np.array(getattr(self.config, 'BUTTON_COLOR_HSV_UPPER', (15, 255, 255)))
-                    lower2 = np.array(getattr(self.config, 'BUTTON_COLOR_HSV_LOWER2', (170, 120, 80)))
-                    upper2 = np.array(getattr(self.config, 'BUTTON_COLOR_HSV_UPPER2', (180, 255, 255)))
-
-                    mask1 = cv2.inRange(hsv, lower1, upper1)
-                    mask2 = cv2.inRange(hsv, lower2, upper2)
-                    mask = cv2.bitwise_or(mask1, mask2)
-
-                    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                    min_area = getattr(self.config, 'BUTTON_MIN_AREA', 2500)
-                    min_w = getattr(self.config, 'BUTTON_MIN_WIDTH', 80)
-                    min_h = getattr(self.config, 'BUTTON_MIN_HEIGHT', 30)
-
-                    buttons = []
-                    for cnt in contours:
-                        x, y, bw, bh = cv2.boundingRect(cnt)
-                        area = bw * bh
-                        if area < min_area or bw < min_w or bh < min_h:
-                            continue
-                        cx = rx1 + x + bw // 2
-                        cy = ry1 + y + bh // 2
-                        buttons.append((cx, cy))
-
-                    buttons.sort(key=lambda b: b[0])
-                    if len(buttons) >= 2:
-                        if len(buttons) == 2:
-                            mapping = {'hit': buttons[0], 'stand': buttons[1]}
-                        elif len(buttons) == 3:
-                            mapping = {'hit': buttons[0], 'stand': buttons[1], 'double': buttons[2]}
-                        elif len(buttons) >= 4:
-                            mapping = {
-                                'hit': buttons[0],
-                                'stand': buttons[1],
-                                'double': buttons[2],
-                                'split': buttons[3],
-                            }
-                        else:
-                            mapping = {}
-                        if getattr(config, 'DISABLE_SPLIT', False):
-                            mapping.pop('split', None)
-                        return mapping
+        def _dynamic_buttons() -> dict:
+            region = getattr(self.config, "BUTTON_DETECT_REGION", None)
+            if not region:
+                return {}
 
             h, w = screen.shape[:2]
-            radius = getattr(self.config, 'BUTTON_VALIDATE_RADIUS', 18)
-            threshold = getattr(self.config, 'BUTTON_VALIDATE_THRESHOLD', 0.25)
-            lower1 = np.array(getattr(self.config, 'BUTTON_COLOR_HSV_LOWER', (0, 120, 80)))
-            upper1 = np.array(getattr(self.config, 'BUTTON_COLOR_HSV_UPPER', (15, 255, 255)))
-            lower2 = np.array(getattr(self.config, 'BUTTON_COLOR_HSV_LOWER2', (170, 120, 80)))
-            upper2 = np.array(getattr(self.config, 'BUTTON_COLOR_HSV_UPPER2', (180, 255, 255)))
+            rx1 = int(w * region["x_percent"][0])
+            rx2 = int(w * region["x_percent"][1])
+            ry1 = int(h * region["y_percent"][0])
+            ry2 = int(h * region["y_percent"][1])
+
+            roi = screen[ry1:ry2, rx1:rx2]
+            if roi.size == 0:
+                return {}
+
+            hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+            lower1 = np.array(getattr(self.config, "BUTTON_COLOR_HSV_LOWER", (0, 120, 80)))
+            upper1 = np.array(getattr(self.config, "BUTTON_COLOR_HSV_UPPER", (15, 255, 255)))
+            lower2 = np.array(getattr(self.config, "BUTTON_COLOR_HSV_LOWER2", (170, 120, 80)))
+            upper2 = np.array(getattr(self.config, "BUTTON_COLOR_HSV_UPPER2", (180, 255, 255)))
+
+            mask1 = cv2.inRange(hsv, lower1, upper1)
+            mask2 = cv2.inRange(hsv, lower2, upper2)
+            mask = cv2.bitwise_or(mask1, mask2)
+            self._diag_save(diag, image_name="buttons_dynamic_mask.png", image=mask)
+
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            min_area = getattr(self.config, "BUTTON_MIN_AREA", 2500)
+            min_w = getattr(self.config, "BUTTON_MIN_WIDTH", 80)
+            min_h = getattr(self.config, "BUTTON_MIN_HEIGHT", 30)
+
+            centers = []
+            for cnt in contours:
+                x, y, bw, bh = cv2.boundingRect(cnt)
+                area = bw * bh
+                if area < min_area or bw < min_w or bh < min_h:
+                    continue
+                cx = rx1 + x + bw // 2
+                cy = ry1 + y + bh // 2
+                centers.append((cx, cy))
+
+            centers.sort(key=lambda b: b[0])
+            if len(centers) < 2:
+                return {}
+
+            if len(centers) == 2:
+                mapping = {"hit": centers[0], "stand": centers[1]}
+            elif len(centers) == 3:
+                mapping = {"hit": centers[0], "stand": centers[1], "double": centers[2]}
+            else:
+                mapping = {"hit": centers[0], "stand": centers[1], "double": centers[2], "split": centers[3]}
+
+            if split_disabled:
+                mapping.pop("split", None)
+
+            # Convert from frame coords -> screen coords
+            return {k: self._frame_to_screen(v) for k, v in mapping.items()}
+
+        def _fixed_buttons() -> dict:
+            if not fixed_positions:
+                return {}
+
+            # Filter split if disabled.
+            positions = dict(fixed_positions)
+            if split_disabled:
+                positions.pop("split", None)
+
+            if not validate_fixed:
+                return positions
+
+            h, w = screen.shape[:2]
+            radius = getattr(self.config, "BUTTON_VALIDATE_RADIUS", 18)
+            threshold = getattr(self.config, "BUTTON_VALIDATE_THRESHOLD", 0.25)
+            lower1 = np.array(getattr(self.config, "BUTTON_COLOR_HSV_LOWER", (0, 120, 80)))
+            upper1 = np.array(getattr(self.config, "BUTTON_COLOR_HSV_UPPER", (15, 255, 255)))
+            lower2 = np.array(getattr(self.config, "BUTTON_COLOR_HSV_LOWER2", (170, 120, 80)))
+            upper2 = np.array(getattr(self.config, "BUTTON_COLOR_HSV_UPPER2", (180, 255, 255)))
 
             visible = {}
             ratios: Dict[str, float] = {}
-            for name, (x, y) in positions.items():
-                if getattr(config, 'DISABLE_SPLIT', False) and name == 'split':
-                    continue
-                x1 = max(0, x - radius)
-                x2 = min(w, x + radius)
-                y1 = max(0, y - radius)
-                y2 = min(h, y + radius)
+            for name, (sx, sy) in positions.items():
+                fx, fy = self._screen_to_frame((sx, sy))
+                x1 = max(0, fx - radius)
+                x2 = min(w, fx + radius)
+                y1 = max(0, fy - radius)
+                y2 = min(h, fy + radius)
                 if x2 <= x1 or y2 <= y1:
                     continue
 
@@ -983,7 +1104,7 @@ class GOP3Detector:
                 ratio = float(cv2.countNonZero(mask)) / float(mask.size)
                 ratios[name] = ratio
                 if ratio >= threshold:
-                    visible[name] = (x, y)
+                    visible[name] = (sx, sy)
 
             self._diag_save(
                 diag,
@@ -992,7 +1113,22 @@ class GOP3Detector:
             )
             return visible
 
-        # Fallback to empty dict if no fixed positions
+        # 1) Prefer dynamic button detection (robust to DPI/layout drift)
+        if prefer_dynamic:
+            dynamic = _dynamic_buttons()
+            if dynamic:
+                return dynamic
+
+        # 2) Fixed buttons (optionally validated by color at those points)
+        fixed = _fixed_buttons()
+        if fixed:
+            return fixed
+
+        # 3) Fallback to dynamic detection (even if not preferred)
+        dynamic = _dynamic_buttons()
+        if dynamic:
+            return dynamic
+
         return {}
 
     def detect_auto_bet_checkbox(self, screen, diag: Optional["DiagnosticIteration"] = None) -> tuple:
@@ -1065,7 +1201,7 @@ class GOP3Detector:
         pad = int(min(bw, bh) * pad_ratio)
         inner = roi[y + pad:y + bh - pad, x + pad:x + bw - pad]
         if inner.size == 0:
-            return (None, (cx, cy))
+            return (None, self._frame_to_screen((cx, cy)))
         self._diag_save(diag, image_name="auto_bet_inner.png", image=inner)
 
         inner_gray = cv2.cvtColor(inner, cv2.COLOR_BGR2GRAY)
@@ -1085,7 +1221,88 @@ class GOP3Detector:
                 "center": [int(cx), int(cy)],
             },
         )
-        return (checked, (cx, cy))
+        return (checked, self._frame_to_screen((cx, cy)))
+
+    def _hsv_ratio_at_screen_point(
+        self,
+        screen,
+        screen_pt,
+        *,
+        radius: int,
+        lower1,
+        upper1,
+        lower2,
+        upper2,
+    ) -> float:
+        """Return HSV mask ratio around a screen point (converted into frame coords)."""
+        if screen is None or screen.size == 0 or not screen_pt:
+            return 0.0
+
+        h, w = screen.shape[:2]
+        fx, fy = self._screen_to_frame(screen_pt)
+        x1 = max(0, fx - radius)
+        x2 = min(w, fx + radius)
+        y1 = max(0, fy - radius)
+        y2 = min(h, fy + radius)
+        if x2 <= x1 or y2 <= y1:
+            return 0.0
+
+        roi = screen[y1:y2, x1:x2]
+        if roi.size == 0:
+            return 0.0
+
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        mask1 = cv2.inRange(hsv, np.array(lower1), np.array(upper1))
+        mask2 = cv2.inRange(hsv, np.array(lower2), np.array(upper2))
+        mask = cv2.bitwise_or(mask1, mask2)
+        return float(cv2.countNonZero(mask)) / float(mask.size)
+
+    def detect_bet_button_visible(self, screen, diag: Optional["DiagnosticIteration"] = None) -> bool:
+        """Heuristic: treat BET button as visible if a red-ish mask is present at BET_BUTTON_POSITION."""
+        pos = getattr(self.config, "BET_BUTTON_POSITION", None)
+        if not pos:
+            return False
+
+        radius = int(getattr(self.config, "BET_VALIDATE_RADIUS", 18))
+        threshold = float(getattr(self.config, "BET_VALIDATE_THRESHOLD", 0.20))
+        lower1 = getattr(self.config, "BET_BUTTON_HSV_LOWER", getattr(self.config, "BUTTON_COLOR_HSV_LOWER", (0, 120, 80)))
+        upper1 = getattr(self.config, "BET_BUTTON_HSV_UPPER", getattr(self.config, "BUTTON_COLOR_HSV_UPPER", (15, 255, 255)))
+        lower2 = getattr(self.config, "BET_BUTTON_HSV_LOWER2", getattr(self.config, "BUTTON_COLOR_HSV_LOWER2", (170, 120, 80)))
+        upper2 = getattr(self.config, "BET_BUTTON_HSV_UPPER2", getattr(self.config, "BUTTON_COLOR_HSV_UPPER2", (180, 255, 255)))
+
+        ratio = self._hsv_ratio_at_screen_point(
+            screen,
+            pos,
+            radius=radius,
+            lower1=lower1,
+            upper1=upper1,
+            lower2=lower2,
+            upper2=upper2,
+        )
+        self._diag_save(
+            diag,
+            json_name="bet_button_visible.json",
+            json_obj={"pos": [int(pos[0]), int(pos[1])], "radius": radius, "threshold": threshold, "ratio": float(ratio)},
+        )
+        return ratio >= threshold
+
+    def detect_betting_ui(self, screen, diag: Optional["DiagnosticIteration"] = None) -> dict:
+        """
+        Detect whether the UI is in a "place bet" state.
+
+        Signals (best-effort):
+            - auto-bet checkbox exists (checked or unchecked)
+            - BET button is visible at the configured position
+        """
+        checked, auto_pos = self.detect_auto_bet_checkbox(screen, diag=diag)
+        auto_present = (checked is not None) and (auto_pos is not None)
+        bet_visible = self.detect_bet_button_visible(screen, diag=diag)
+        return {
+            "betting_ui": bool(auto_present or bet_visible),
+            "auto_bet_checked": checked if auto_present else None,
+            "auto_bet_position": auto_pos if auto_present else None,
+            "bet_button_visible": bool(bet_visible),
+        }
 
     def detect_game_state(self, screen, diag: Optional["DiagnosticIteration"] = None) -> dict:
         """
@@ -1109,6 +1326,10 @@ class GOP3Detector:
             'buttons': {},
             'can_split': False,
             'can_double': False,
+            'betting_ui': False,
+            'auto_bet_checked': None,
+            'auto_bet_position': None,
+            'bet_button_visible': False,
         }
 
         # Detect totals independently
@@ -1120,17 +1341,27 @@ class GOP3Detector:
         state['is_soft'] = is_soft
         state['dealer_total'] = dealer_total
 
-        # If we can read a player total, we're in player turn
-        if total is not None:
-            state['phase'] = 'player_turn'
-            state['buttons'] = self.detect_buttons(screen, diag=diag)
-            state['can_split'] = 'split' in state['buttons']
-            state['can_double'] = 'double' in state['buttons']
+        # Detect betting UI + action buttons (used for phase classification and clicking)
+        ui = self.detect_betting_ui(screen, diag=diag)
+        state.update(ui)
 
+        buttons = self.detect_buttons(screen, diag=diag)
+        state['buttons'] = buttons
+        state['can_split'] = 'split' in buttons
+        state['can_double'] = 'double' in buttons
+
+        required = tuple(getattr(self.config, "REQUIRE_BUTTONS_FOR_ACTION", ("hit", "stand")))
+        has_required_buttons = all(b in buttons for b in required) if required else bool(buttons)
+
+        # Phase classification:
+        # - Only call it "betting" when betting UI is visible.
+        # - Missing totals + no betting UI is usually dealing/dealer/result => "waiting".
+        if total is not None:
+            state['phase'] = 'player_turn' if has_required_buttons else 'dealer_turn'
             if getattr(self.config, 'READ_DEALER_CARD', False):
                 state['dealer_card'] = self.detect_dealer_card(screen)
         else:
-            state['phase'] = 'betting'
+            state['phase'] = 'betting' if state.get('betting_ui', False) else 'waiting'
 
         self._diag_save(diag, json_name="detected_state.json", json_obj=state)
         return state

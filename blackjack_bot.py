@@ -45,9 +45,10 @@ class BlackjackBot:
     Reads game state from screen and clicks appropriate buttons.
     """
 
-    def __init__(self, debug=False, auto_bet=False, bet_amount='25k'):
+    def __init__(self, debug=False, auto_bet=False, click_bet=False, bet_amount='25k'):
         self.debug = debug
         self.auto_bet = auto_bet
+        self.click_bet = click_bet
         self.bet_amount = bet_amount
 
         self.detector = GOP3Detector(config)
@@ -97,6 +98,7 @@ class BlackjackBot:
         self.actions_in_round = 0
         self.last_auto_bet_check = 0.0
         self.auto_bet_checked = None
+        self.last_bet_click_at = 0.0
 
     def reset_round_cache(self):
         """Reset cached totals when a round ends."""
@@ -153,6 +155,10 @@ class BlackjackBot:
             'buttons': {},
             'can_split': False,
             'can_double': False,
+            'betting_ui': False,
+            'auto_bet_checked': None,
+            'auto_bet_position': None,
+            'bet_button_visible': False,
         }
 
         if need_player:
@@ -172,13 +178,21 @@ class BlackjackBot:
 
         state['dealer_total'] = dealer_total
 
+        ui = self.detector.detect_betting_ui(screen, diag=diag)
+        state.update(ui)
+
+        buttons = self.detector.detect_buttons(screen, diag=diag)
+        state['buttons'] = buttons
+        state['can_split'] = 'split' in buttons
+        state['can_double'] = 'double' in buttons
+
+        required = tuple(getattr(config, "REQUIRE_BUTTONS_FOR_ACTION", ("hit", "stand")))
+        has_required_buttons = all(b in buttons for b in required) if required else bool(buttons)
+
         if total is not None:
-            state['phase'] = 'player_turn'
-            state['buttons'] = self.detector.detect_buttons(screen, diag=diag)
-            state['can_split'] = 'split' in state['buttons']
-            state['can_double'] = 'double' in state['buttons']
+            state['phase'] = 'player_turn' if has_required_buttons else 'dealer_turn'
         else:
-            state['phase'] = 'betting'
+            state['phase'] = 'betting' if state.get('betting_ui', False) else 'waiting'
 
         if diag and getattr(diag, "enabled", False):
             try:
@@ -522,18 +536,63 @@ class BlackjackBot:
 
             verified = self.verify_action_applied(action, prev_state)
             if not verified:
-                retries = getattr(config, 'CLICK_VERIFY_RETRIES', 0)
-                retry_actions = getattr(config, 'CLICK_VERIFY_RETRY_ACTIONS', ("stand",))
-                if retries > 0 and action in retry_actions:
-                    for _ in range(retries):
-                        self.log(f"Retrying click for action '{action}'")
-                        self.controller.click_button(pos)
-                        if self.verify_action_applied(action, prev_state):
-                            verified = True
-                            break
-                if not verified:
-                    self.log(f"Action '{action}' not verified; skipping state advance")
-                    return False
+                retry_actions = tuple(getattr(config, "CLICK_VERIFY_RETRY_ACTIONS", ("stand",)))
+
+                policy = getattr(config, "CLICK_VERIFY_ON_FAIL", None)
+                if policy is None:
+                    # Back-compat: older configs used CLICK_VERIFY_RETRIES.
+                    retries = int(getattr(config, "CLICK_VERIFY_RETRIES", 0))
+                    if retries > 0 and action in retry_actions:
+                        for _ in range(retries):
+                            self.log(f"Retrying click for action '{action}'")
+                            if not self.controller.click_button(pos):
+                                return False
+                            if self.verify_action_applied(action, prev_state):
+                                verified = True
+                                break
+                    if not verified:
+                        self.log(f"Action '{action}' not verified; skipping state advance")
+                        return False
+                else:
+                    policy = str(policy).strip().lower()
+
+                    def _stop_bot(reason: str) -> None:
+                        global _stop_requested
+                        _stop_requested = True
+                        self.running = False
+                        self.log(reason)
+
+                    if policy == "retry":
+                        max_retries = int(getattr(config, "CLICK_VERIFY_MAX_RETRIES", 2))
+                        if action in retry_actions and max_retries > 0:
+                            for _ in range(max_retries):
+                                self.log(f"Retrying click for action '{action}'")
+                                if not self.controller.click_button(pos):
+                                    return False
+                                if self.verify_action_applied(action, prev_state):
+                                    verified = True
+                                    break
+
+                        if not verified:
+                            fallback = str(getattr(config, "CLICK_VERIFY_FALLBACK", "skip")).strip().lower()
+                            if fallback == "stop":
+                                _stop_bot(f"Action '{action}' not verified; stopping bot")
+                                return False
+                            # Default: skip (do not advance internal state)
+                            self.log(f"Action '{action}' not verified; skipping state advance")
+                            return False
+
+                    elif policy == "skip":
+                        self.log(f"Action '{action}' not verified; skipping state advance")
+                        return False
+
+                    elif policy == "stop":
+                        _stop_bot(f"Action '{action}' not verified; stopping bot")
+                        return False
+
+                    else:
+                        self.log(f"Unknown CLICK_VERIFY_ON_FAIL policy '{policy}'; skipping state advance")
+                        return False
 
             self.last_action = action
             self.actions_in_round += 1
@@ -574,7 +633,8 @@ class BlackjackBot:
             pos = self.jitter_button_position(config.BET_BUTTON_POSITION)
             print(f"Placing bet at {pos}...")
             self.human_delay()  # Add human-like delay before clicking
-            self.controller.click_button(pos)
+            if not self.controller.click_button(pos):
+                return False
             self.last_action = 'bet'  # Reset so first hit of new hand isn't "subsequent"
             return True
         return False
@@ -608,9 +668,23 @@ class BlackjackBot:
         if phase == 'betting':
             if self.auto_bet:
                 return self.ensure_auto_bet_enabled()
-            else:
-                self.log("Betting phase - waiting for manual bet")
+
+            if self.click_bet:
+                # Avoid spamming the bet button while the hand is transitioning/dealing.
+                grace = float(getattr(config, "DEALING_GRACE_SEC", 2.0))
+                now = time.time()
+                if now - self.last_bet_click_at < grace:
+                    return False
+                if not state.get("betting_ui", False):
+                    return False
+                if self.place_bet():
+                    self.last_bet_click_at = now
+                    self.reset_round_cache()
+                    return True
                 return False
+
+            self.log("Betting phase - waiting for manual bet")
+            return False
 
         elif phase == 'player_turn':
             can_split = state['can_split']
@@ -666,7 +740,8 @@ class BlackjackBot:
                 self.waiting_for_total_update = True
                 return True
 
-        elif phase == 'waiting':
+        elif phase in ('waiting', 'dealer_turn'):
+            # dealer_turn is a visual-only state (player buttons gone); treat as waiting.
             self.log("Waiting for next hand...")
 
         return False
@@ -739,6 +814,11 @@ def main():
         help='Automatically place bets'
     )
     parser.add_argument(
+        '--click-bet',
+        action='store_true',
+        help='Click the BET button each hand (ignored if --auto-bet is set)'
+    )
+    parser.add_argument(
         '--bet',
         default='25k',
         choices=['25k', '50k', '100k', '200k'],
@@ -785,8 +865,9 @@ def main():
 
     bot = BlackjackBot(
         debug=args.debug,
-        auto_bet=args.auto_bet,
-        bet_amount=args.bet
+        auto_bet=bool(args.auto_bet),
+        click_bet=bool(args.click_bet) and not bool(args.auto_bet),
+        bet_amount=args.bet,
     )
 
     if args.test:
