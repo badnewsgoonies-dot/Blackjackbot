@@ -1,0 +1,169 @@
+Blackjackbot Runtime Flow (Functions + Timing)
+=============================================
+
+This document describes the real-time execution flow of the bot, what functions
+are called, and the timing controls (from gop3_config.py) that shape behavior.
+
+
+1) How The Program Starts
+-------------------------
+
+A) GUI entrypoint
+  - gui_launcher.py
+    - "Run bot" / "Run bot (test)" button -> App._spawn_bot(args)
+    - Launches:
+        python gui_launcher.py --bot [args]
+    - gui_launcher.py detects "--bot" -> run_bot_mode(args)
+      -> imports blackjack_bot.py -> blackjack_bot.main()
+
+B) CLI entrypoint
+  - python blackjack_bot.py
+    - main() parses args and constructs BlackjackBot(...)
+    - If --test: bot.run_once()
+    - Else: bot.run()
+
+
+2) Main Loop (Real-Time Tick)
+-----------------------------
+
+blackjack_bot.py
+  - BlackjackBot.run()
+    - keyboard.add_hotkey('ctrl+alt+j', _request_stop)
+    - while running and not stopped:
+        action_taken = self.run_once()
+        if action_taken:
+          sleep(POST_CLICK_DELAY)    # gop3_config.py POST_CLICK_DELAY (default 0.3s)
+        else:
+          sleep(SCAN_INTERVAL)       # gop3_config.py SCAN_INTERVAL (default 0.1s)
+
+Implication:
+  - When "idle", the bot polls about every 0.1s.
+  - After taking an action, it waits about 0.3s before scanning again.
+
+
+3) One Iteration (Decision Cycle)
+---------------------------------
+
+blackjack_bot.py
+  - BlackjackBot.run_once()
+    1) state = self.read_confirmed_state(require_player_total_change=...)
+       - This is where most time is spent (capture + OCR + stabilization).
+
+    2) Branch by phase:
+       - phase == 'betting'
+           - if --auto-bet: ensure_auto_bet_enabled() (throttled by AUTO_BET_CHECK_INTERVAL)
+           - else: do nothing (wait for manual bet)
+
+       - phase == 'player_turn'
+           - action = get_strategy_action(player_total, dealer_total, can_double, can_split, is_soft)
+             (strategy lookup is near-instant; dictionary/table based)
+           - execute_action(action, buttons, prev_state)
+
+
+4) State Reading + Stabilization (Most Important Timing)
+--------------------------------------------------------
+
+blackjack_bot.py
+  - BlackjackBot.read_confirmed_state(require_player_total_change=False)
+    Timing controls in gop3_config.py:
+      - TOTAL_READ_MAX_WAIT      (default 0.5s)  : hard timeout for confirmation
+      - TOTAL_READ_INTERVAL      (default 0.05s) : sleep between retries
+      - TOTAL_READ_STABLE_COUNT  (default 1)     : how many identical reads required
+
+    Loop (until confirmed or timeout):
+      - screen = self.detector.capture_game()
+      - state  = self.capture_state(screen, need_player=..., need_dealer=...)
+
+blackjack_bot.py
+  - BlackjackBot.capture_state(screen, ...)
+    Calls into screen_capture.py (GOP3Detector):
+      - detect_player_total(screen)   -> OCR blue circle in PLAYER_TOTAL_REGION
+      - detect_dealer_total(screen)   -> OCR blue circle in DEALER_TOTAL_REGION
+      - if player_total exists:
+          - detect_buttons(screen)    -> fixed positions + HSV visibility validation
+          - can_split/can_double from presence of keys in buttons dict
+
+    Optional sanity check (only if Tesseract is available):
+      - detect_player_card_total(screen) if ENABLE_CARD_SANITY_CHECK=True
+
+Return behavior:
+  - If player total is None, state.phase becomes 'betting' and run_once() will not act.
+  - If totals are present and stable, state.totals_confirmed=True and decisions can proceed.
+
+
+5) Clicking (Mouse Automation)
+------------------------------
+
+blackjack_bot.py
+  - BlackjackBot.execute_action(action, buttons, prev_state)
+    Preconditions:
+      - action must exist in buttons dict (otherwise no click is attempted)
+      - split may be blocked by DISABLE_SPLIT
+
+    Click call:
+      - clicked = self.controller.click_button((x, y))
+
+screen_capture.py
+  - GameController.click_button(position)
+    - Foreground focus check:
+        - compares current foreground window title to GAME_WINDOW_TITLE
+        - if mismatch: returns False and logs warning (rate-limited)
+    - if allowed: calls click(x, y)
+
+screen_capture.py
+  - GameController.click(x, y)
+    - pyautogui.click(x, y)
+    - sleep(CLICK_DELAY) (default 0.0s)
+    Note: pyautogui.PAUSE is set to 0.1s, so each pyautogui call can add ~0.1s.
+
+
+6) Post-Click Verification (Gated)
+----------------------------------
+
+blackjack_bot.py
+  - BlackjackBot.verify_action_applied(action, prev_state)
+    Timing controls in gop3_config.py:
+      - CLICK_VERIFY_TIMEOUT       (default 0.7s)
+      - CLICK_VERIFY_INTERVAL      (default 0.08s)
+      - CLICK_VERIFY_STABLE_COUNT  (default 2)
+
+    Loop:
+      - capture screen
+      - state = detector.detect_game_state(screen)
+        (reads totals + buttons again)
+      - require stable reads + a visible "change" signal:
+          - hit/double/split: player total changes OR button set changes
+          - stand: phase changes OR button set changes OR dealer_total changes
+
+    IMPORTANT:
+      - If verification fails, execute_action() returns False
+        (the bot does not advance internal state as if the click worked).
+
+
+7) Expected Timeline During A Turn (Typical)
+--------------------------------------------
+
+With current defaults:
+  - read_confirmed_state: up to 0.5s total (may be faster if OCR succeeds quickly)
+  - click: ~0.1s overhead due to pyautogui.PAUSE + CLICK_DELAY(0.0)
+  - verification: up to 0.7s (often ~0.16s + OCR time if it stabilizes quickly)
+  - after action: POST_CLICK_DELAY = 0.3s
+
+So a typical "player_turn" action might complete in roughly:
+  ~0.2s to ~1.5s depending on OCR speed and verification.
+
+
+8) Common Reasons "No Click Happens"
+------------------------------------
+
+1) Focus blocked:
+   - Foreground window title does not contain GAME_WINDOW_TITLE
+   - Result: click_button() returns False, warning printed.
+
+2) Buttons not detected/visible:
+   - detect_buttons() returns no key for the action because HSV visibility validation fails
+   - Result: execute_action() never attempts to click.
+
+3) PyAutoGUI failsafe:
+   - pyautogui.FAILSAFE=True; moving mouse to top-left can abort/raise.
+

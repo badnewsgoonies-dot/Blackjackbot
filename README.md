@@ -5,27 +5,29 @@ A bot that plays blackjack using basic strategy ("the book") by reading the scre
 ## Requirements
 
 - Python 3.8+
-- **Tesseract OCR** (required for reading cards and totals)
-- Governor of Poker 3 running at 3440x1440 resolution
+- Governor of Poker 3 visible on screen (calibration assumes a consistent UI layout)
+- OCR engine:
+  - **EasyOCR** (recommended) or
+  - **Tesseract** (optional; mainly used for card sanity-check)
 
 ## Setup
 
-### 1. Install Tesseract OCR
-
-Download and install from: https://github.com/UB-Mannheim/tesseract/wiki
-
-After installation, add Tesseract to your PATH, or edit `screen_capture.py` and uncomment:
-```python
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-```
-
-### 2. Install Python Dependencies
+### 1. Install Python Dependencies
 
 ```bash
 pip install -r requirements.txt
+pip install easyocr
 ```
 
-### 3. Test Detection
+### 2. Start-to-Finish Guide (Recommended)
+
+See `START_HERE.md` for:
+- GUI setup (`gui_launcher.py`)
+- Focus/title configuration (`GAME_WINDOW_TITLE`)
+- Coordinate calibration (`calibrate_positions.py`)
+- Running + verification expectations
+
+### 3. Test Detection (Calibration Images)
 
 ```bash
 python test_detection.py
@@ -104,3 +106,30 @@ The bot follows standard basic strategy ("the book"):
 ### Wrong resolution
 - The bot is calibrated for 3440x1440
 - Edit `gop3_config.py` to adjust `BUTTON_REGION_Y_MIN/MAX` for different resolutions
+
+## Diagnostics Dump Mode (for debugging / sharing a single bundle)
+
+The bot can optionally save per-iteration screenshots, ROIs, masks, OCR results, and JSON state to help debug detection.
+
+### Enable (GUI)
+
+Run `gui_launcher.py` (or the built launcher) and check:
+- "Enable diagnostics dump"
+- Optional: "Zip on exit"
+
+Then click "Save to config".
+
+### Enable (CLI)
+
+```bash
+# Save diagnostics to diagnostics/<timestamp>/
+python blackjack_bot.py --test --diag
+
+# Zip the session at exit
+python blackjack_bot.py --test --diag --diag-zip
+```
+
+### Output
+
+- Folder: `diagnostics/<YYYYMMDD_HHMMSS>/`
+- Optional zip: `diagnostics/<YYYYMMDD_HHMMSS>.zip`

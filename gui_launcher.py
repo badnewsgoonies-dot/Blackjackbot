@@ -195,10 +195,14 @@ class App(tk.Tk):
             return
         try:
             python_exe = _python_executable()
+            env = os.environ.copy()
+            # Ensure calibration updates the same config file this GUI/bot will load.
+            env["GOP3_CONFIG_PATH"] = str(CONFIG_PATH)
             subprocess.Popen(
                 [python_exe, str(script.name)],
                 cwd=str(script.parent),
                 creationflags=subprocess.CREATE_NEW_CONSOLE,
+                env=env,
             )
             self.status.set("Launched calibration in new console window.")
         except Exception as exc:

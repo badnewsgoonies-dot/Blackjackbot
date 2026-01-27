@@ -6,6 +6,22 @@ Run this script and click on each location when prompted.
 import pyautogui
 import time
 import json
+import os
+
+try:
+    from config_loader import get_external_config_path
+except Exception:
+    get_external_config_path = None  # type: ignore
+
+
+def _config_path():
+    # Prefer the same resolution path used by the bot/GUI (and supports GOP3_CONFIG_PATH override).
+    if get_external_config_path is not None:
+        try:
+            return str(get_external_config_path())
+        except Exception:
+            pass
+    return os.path.join(os.getcwd(), "gop3_config.py")
 
 def get_click_position(prompt, optional=False):
     """Wait for user to click and return the position."""
@@ -139,11 +155,12 @@ PLAYER_CARD_REGION = {fmt_region(regions['player_card'])}
     print("\nUpdate gop3_config.py automatically? (y/n): ", end="")
     if input().lower() == 'y':
         update_config(positions, regions, screen_w, screen_h)
-        print("Config updated!")
+        print(f"Config updated: {_config_path()}")
 
 def update_config(positions, regions, screen_w, screen_h):
     """Update gop3_config.py with new positions and regions."""
-    with open('gop3_config.py', 'r') as f:
+    config_path = _config_path()
+    with open(config_path, 'r') as f:
         content = f.read()
 
     import re
@@ -192,7 +209,7 @@ def update_config(positions, regions, screen_w, screen_h):
         replacement = f"{name} = {fmt_region(region)}"
         content = re.sub(pattern, replacement, content, flags=re.DOTALL)
 
-    with open('gop3_config.py', 'w') as f:
+    with open(config_path, 'w') as f:
         f.write(content)
 
 if __name__ == "__main__":
