@@ -98,7 +98,7 @@ HUMAN_DELAY_MAX = 0.0   # Maximum delay before clicking (seconds)
 
 # Click verification (keep tight so turns stay within timing budget)
 CLICK_VERIFY_ENABLED = True
-CLICK_VERIFY_TIMEOUT = 0.7
+CLICK_VERIFY_TIMEOUT = 1.5
 CLICK_VERIFY_INTERVAL = 0.08
 CLICK_VERIFY_STABLE_COUNT = 2
 CLICK_VERIFY_RETRIES = 0
@@ -168,7 +168,7 @@ TEMPLATE_MAX_COMPONENTS = 6
 TEMPLATE_FALLBACK_TO_OCR = True
 
 # Total read synchronization
-TOTAL_READ_MAX_WAIT = 0.5   # Was 2.0
+TOTAL_READ_MAX_WAIT = 1.5   # Was 2.0
 TOTAL_READ_STABLE_COUNT = 1
 TOTAL_READ_INTERVAL = 0.05  # Was 0.1
 

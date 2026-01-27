@@ -521,19 +521,10 @@ class BlackjackBot:
 
             verified = self.verify_action_applied(action, prev_state)
             if not verified:
-                retries = getattr(config, 'CLICK_VERIFY_RETRIES', 0)
-                retry_actions = getattr(config, 'CLICK_VERIFY_RETRY_ACTIONS', ("stand",))
-                if retries > 0 and action in retry_actions:
-                    for _ in range(retries):
-                        self.log(f"Retrying click for action '{action}'")
-                        self.controller.click_button(pos)
-                        if self.verify_action_applied(action, prev_state):
-                            verified = True
-                            break
-                if not verified:
-                    self.log(f"Action '{action}' not verified; skipping state advance")
-                    return False
-
+                self.log(
+                    f"Action '{action}' not verified within timeout; "
+                    "treating as pending and waiting for totals update"
+                )
             self.last_action = action
             self.actions_in_round += 1
             return True
