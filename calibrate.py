@@ -71,7 +71,7 @@ class Calibrator:
         """Calibrate button templates."""
         print("\n=== Button Calibration ===")
 
-        buttons = ['hit', 'stand', 'double', 'split', 'deal']
+        buttons = ['hit_bet', 'stand', 'double', 'split', 'deal']
         for btn in buttons:
             input(f"\nMake the {btn.upper()} button visible and press ENTER...")
             self.take_screenshot()
@@ -167,7 +167,7 @@ BUTTON_REGION = {self.regions.get('buttons')}
             print(f"  {card['rank']} at {card['position']} (confidence: {card['confidence']:.2f})")
 
         print("\nFound buttons:")
-        for btn_name in ['hit', 'stand', 'double', 'split', 'deal']:
+        for btn_name in ['hit_bet', 'stand', 'double', 'split', 'deal']:
             result = btn_det.find_button_by_template(self.current_screenshot, btn_name)
             if result:
                 print(f"  {btn_name}: position {result[:2]}, confidence {result[2]:.2f}")

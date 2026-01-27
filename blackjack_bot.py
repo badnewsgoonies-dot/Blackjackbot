@@ -543,8 +543,11 @@ class BlackjackBot:
             require_player_total_change=self.waiting_for_total_update
         )
         if state is None:
+            print("[DEBUG] state is None - timed out waiting for stable totals")
             self._write_hud_state(None, None, None, None, "betting")
             return False
+
+        print(f"[DEBUG] phase={state.get('phase')} buttons={list(state.get('buttons', {}).keys())}")
 
         now = time.time()
         if now - self._last_chart_check >= 5.0:
@@ -582,19 +585,42 @@ class BlackjackBot:
                 return False
 
         if phase == 'betting':
-            # Auto-click bet using hit_bet position
-            btn_pos = self._button_pos('hit_bet')
+            # If we clicked bet and are waiting for cards, don't click again
+            if getattr(self, '_waiting_for_deal', False):
+                # Check if cards have been dealt (player_total visible)
+                if player_total is not None:
+                    self._waiting_for_deal = False  # Cards dealt, reset
+                    print(f"[DEBUG] Cards dealt, player_total={player_total}")
+                else:
+                    print("[DEBUG] Waiting for cards to be dealt...")
+                    return False
+            
+            # Auto-click bet using hit_bet position from config (scaled by auto-cal)
+            positions = getattr(config, 'BUTTON_POSITIONS', {}) or {}
+            btn_pos = positions.get('hit_bet')
+            print(f"[DEBUG] Raw btn_pos={btn_pos}")
             if btn_pos:
+                # Apply auto-calibration scaling and offset if available
+                try:
+                    if self.detector.auto_cal and self.detector.auto_cal.transform:
+                        btn_pos = self.detector.auto_cal.apply_point(btn_pos)
+                        print(f"[DEBUG] Scaled btn_pos={btn_pos}")
+                except Exception as e:
+                    print(f"[DEBUG] Scale failed: {e}")
+                
+                btn_pos = self.jitter_button_position(btn_pos)
                 self.log(f"Betting phase - clicking bet at {btn_pos}")
                 self.human_delay()
                 self.controller.click_button(btn_pos)
-                self.waiting_for_total_update = True  # Wait for cards
+                self._waiting_for_deal = True  # Wait for cards to appear
                 return True
             else:
                 self.log("Betting phase - no hit_bet position configured")
                 return False
 
         elif phase == 'player_turn':
+            # Reset waiting_for_deal when we enter player_turn
+            self._waiting_for_deal = False
             can_split = state['can_split']
             can_double = state['can_double']
 

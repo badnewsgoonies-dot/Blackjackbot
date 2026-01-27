@@ -26,3 +26,4 @@ build_pyinstaller*.log
 
 # Misc
 nul
+venv/

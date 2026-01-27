@@ -201,10 +201,14 @@ class App(tk.Tk):
         self.current_title.set(title if title else "(no title detected)")
 
     def _set_from_foreground(self):
+        # Give user 2 seconds to click on the game window
+        self.status.set("Click on the game window within 2 seconds...")
+        self.update()
+        time.sleep(2)
         title = get_foreground_window_title()
         if title:
             self.config_title.set(title)
-            self.status.set("Loaded current foreground title.")
+            self.status.set(f"Set to: {title}")
         else:
             self.status.set("No foreground title detected.")
 
@@ -246,7 +250,7 @@ class App(tk.Tk):
             return False
 
         hwnd = matches[0]
-        user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+        # Just bring to foreground without changing window state
         user32.SetForegroundWindow(hwnd)
         return True
 
@@ -312,7 +316,7 @@ class App(tk.Tk):
 
         # If not Windows, warn and skip focus/overlay but still preview
         positions = getattr(load_config(), "BUTTON_POSITIONS", {}) or {}
-        seq = ["hit", "stand", "double", "split"]
+        seq = ["hit_bet", "stand", "double", "split"]
         points = []
         for name in seq:
             if name in positions:
@@ -386,72 +390,37 @@ class App(tk.Tk):
             self.overlay_path = hud_path
 
             if self._focus_game_window():
-                self.status.set("Brought game window to front.")
+                self.status.set("Launching bot...")
             else:
-                self.status.set("Could not focus game window (continuing).")
+                self.status.set("Launching bot (game window not found)...")
 
-            self._preflight_preview()
-            self._bind_start_keys()
-            self.status.set("Press F9 to start bot (Esc to cancel). If hotkeys fail, click this window and press F9.")
-
-            def wait_keys():
-                while True:
-                    try:
-                        if keyboard.is_pressed("f9"):
-                            break
-                    except Exception:
-                        pass
-                    if self._start_event and self._start_event.is_set():
-                        break
-                    try:
-                        if keyboard.is_pressed("esc"):
-                            self.after(0, lambda: self.status.set("Start canceled (Esc)."))
-                            self.after(0, self._unbind_start_keys)
-                            return
-                    except Exception:
-                        pass
-                    if self._cancel_event and self._cancel_event.is_set():
-                        self.after(0, lambda: self.status.set("Start canceled (Esc)."))
-                        self.after(0, self._unbind_start_keys)
-                        return
-                    time.sleep(0.05)
-
-                # Launch bot after F9
-                self.after(0, self._unbind_start_keys)
-                if getattr(sys, "frozen", False):
-                    cmd = [sys.executable, "--bot"] + args
-                else:
-                    cmd = [sys.executable, str(Path(__file__).resolve()), "--bot"] + args
-                proc = subprocess.Popen(
-                    cmd, cwd=str(ROOT), env=env,
-                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                    text=True, bufsize=1
-                )
-                # Stream output to log panel
-                def stream_output():
-                    try:
-                        for line in proc.stdout:
-                            self.after(0, lambda l=line: self._append_log(l))
-                    except Exception:
-                        pass
-                threading.Thread(target=stream_output, daemon=True).start()
-
-                if self._can_show_overlay():
-                    if self.overlay:
-                        try:
-                            self.overlay.destroy()
-                        except Exception:
-                            pass
-                    self.overlay = HUDOverlay(self, hud_path=hud_path, window_title=self.config_title.get())
-                self.after(0, lambda: self.status.set("Launched: " + " ".join(cmd)))
-
-            if self._start_thread and self._start_thread.is_alive():
+            # Launch immediately - no F9 gate
+            if getattr(sys, "frozen", False):
+                cmd = [sys.executable, "--bot"] + args
+            else:
+                cmd = [sys.executable, str(Path(__file__).resolve()), "--bot"] + args
+            proc = subprocess.Popen(
+                cmd, cwd=str(ROOT), env=env,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, bufsize=1
+            )
+            # Stream output to log panel
+            def stream_output():
                 try:
-                    self._start_thread.join(timeout=0)
+                    for line in proc.stdout:
+                        self.after(0, lambda l=line: self._append_log(l))
                 except Exception:
                     pass
-            self._start_thread = threading.Thread(target=wait_keys, daemon=True)
-            self._start_thread.start()
+            threading.Thread(target=stream_output, daemon=True).start()
+
+            if self._can_show_overlay():
+                if self.overlay:
+                    try:
+                        self.overlay.destroy()
+                    except Exception:
+                        pass
+                self.overlay = HUDOverlay(self, hud_path=hud_path, window_title=self.config_title.get())
+            self.status.set("Bot running. Press Ctrl+Alt+J to stop.")
         except Exception as exc:
             self.status.set(f"Failed to launch: {exc}")
 
@@ -496,7 +465,7 @@ class App(tk.Tk):
                 detector.auto_cal = self.auto_cal
                 state = detector.detect_game_state(screen)
                 buttons = state.get("buttons", {}) or {}
-                required = getattr(load_config(), "REQUIRE_BUTTONS_FOR_ACTION", ("hit", "stand"))
+                required = getattr(load_config(), "REQUIRE_BUTTONS_FOR_ACTION", ("hit_bet", "stand"))
                 missing = [b for b in required if b and b not in buttons]
                 visual_ok = state.get("player_total") is not None and state.get("dealer_total") is not None and not missing
                 visual_text = "ok" if visual_ok else "unstable"
@@ -552,7 +521,7 @@ class DebugWindow(tk.Toplevel):
         self.click_after_move = tk.BooleanVar(value=False)
         ttk.Checkbutton(box1, text="Click after move", variable=self.click_after_move).grid(row=0, column=0, columnspan=3, sticky="w", padx=8, pady=4)
 
-        ttk.Button(box1, text="Hit", command=lambda: self._move_to("hit")).grid(row=1, column=0, padx=6, pady=4)
+        ttk.Button(box1, text="Hit/Bet", command=lambda: self._move_to("hit_bet")).grid(row=1, column=0, padx=6, pady=4)
         ttk.Button(box1, text="Stand", command=lambda: self._move_to("stand")).grid(row=1, column=1, padx=6, pady=4)
         ttk.Button(box1, text="Double", command=lambda: self._move_to("double")).grid(row=1, column=2, padx=6, pady=4)
         ttk.Button(box1, text="Split", command=lambda: self._move_to("split")).grid(row=2, column=0, padx=6, pady=4)
@@ -851,6 +820,7 @@ class LiveReaderWindow(tk.Toplevel):
         self.player_var = tk.StringVar(value="Player: --")
         self.dealer_var = tk.StringVar(value="Dealer: --")
         self.phase_var = tk.StringVar(value="Phase: --")
+        self._running = True
 
         ttk.Label(self, textvariable=self.player_var, font=("Consolas", 14)).pack(anchor="w", **pad)
         ttk.Label(self, textvariable=self.dealer_var, font=("Consolas", 14)).pack(anchor="w", **pad)
@@ -859,7 +829,15 @@ class LiveReaderWindow(tk.Toplevel):
         if self._load_error:
             ttk.Label(self, text=f"Error: {self._load_error}", foreground="red").pack(**pad)
 
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _on_close(self):
+        self._running = False
+        self.destroy()
+
     def _tick(self):
+        if not self._running:
+            return
         if self.detector:
             try:
                 import mss
@@ -883,11 +861,11 @@ class LiveReaderWindow(tk.Toplevel):
                 self.player_var.set(f"Player: {pt_str}")
                 self.dealer_var.set(f"Dealer: {dt_str}")
                 self.phase_var.set(f"Phase: {phase}")
-            except Exception as exc:
-                err = str(exc)[:40]
-                self.phase_var.set(f"Error: {err}")
+            except Exception:
+                pass  # Silently ignore errors during shutdown
 
-        self.after(150, self._tick)
+        if self._running:
+            self.after(150, self._tick)
 
 
 def run_bot_mode(args):

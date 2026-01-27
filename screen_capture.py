@@ -1019,12 +1019,12 @@ class GOP3Detector:
                     buttons.sort(key=lambda b: b[0])
                     if len(buttons) >= 2:
                         if len(buttons) == 2:
-                            mapping = {'hit': buttons[0], 'stand': buttons[1]}
+                            mapping = {'hit_bet': buttons[0], 'stand': buttons[1]}
                         elif len(buttons) == 3:
-                            mapping = {'hit': buttons[0], 'stand': buttons[1], 'double': buttons[2]}
+                            mapping = {'hit_bet': buttons[0], 'stand': buttons[1], 'double': buttons[2]}
                         elif len(buttons) >= 4:
                             mapping = {
-                                'hit': buttons[0],
+                                'hit_bet': buttons[0],
                                 'stand': buttons[1],
                                 'double': buttons[2],
                                 'split': buttons[3],

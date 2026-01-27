@@ -72,7 +72,7 @@ def main():
     # Button positions
     print("\n--- BUTTON POSITIONS ---")
     print("(Make sure HIT/STAND/DOUBLE buttons are visible)")
-    positions['hit'] = get_click_position("Click on the CENTER of the HIT button")
+    positions['hit_bet'] = get_click_position("Click on the CENTER of the HIT button")
     positions['stand'] = get_click_position("Click on the CENTER of the STAND button")
     positions['double'] = get_click_position("Click on the CENTER of the DOUBLE button")
     positions['split'] = get_click_position("Click on the CENTER of the SPLIT button", optional=True)
@@ -116,7 +116,7 @@ SCREEN_HEIGHT = {screen_h}
 
 # Button positions (calibrated)
 BUTTON_POSITIONS = {{
-    'hit': {positions['hit']},
+    'hit_bet': {positions['hit_bet']},
     'stand': {positions['stand']},
     'double': {positions['double']},
     'split': {positions['split']},
@@ -164,7 +164,7 @@ def update_config(positions, regions, screen_w, screen_h):
 
     # Update button positions
     new_buttons = f"""BUTTON_POSITIONS = {{
-    'hit': {positions['hit']},
+    'hit_bet': {positions['hit_bet']},
     'stand': {positions['stand']},
     'double': {positions['double']},
     'split': {positions['split']},
