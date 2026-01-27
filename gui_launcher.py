@@ -55,21 +55,7 @@ def read_config_value() -> str:
     except Exception:
         return ""
 
-def read_config_bool(name: str, default: bool = False) -> bool:
-    try:
-        cfg = load_config()
-        value = getattr(cfg, name, default)
-        return bool(value)
-    except Exception:
-        return bool(default)
-
-def write_config_value(
-    value: str,
-    disable: bool,
-    *,
-    diagnostics_enabled: bool = False,
-    diagnostics_zip: bool = False,
-) -> bool:
+def write_config_value(value: str, disable: bool) -> bool:
     if not CONFIG_PATH.exists():
         source = get_bundled_config_path()
         if source.exists():
@@ -94,16 +80,6 @@ def write_config_value(
     else:
         new_text = text + "\n" + replacement + "\n"
 
-    def upsert_bool(src: str, key: str, val: bool) -> str:
-        rep = f"{key} = {str(bool(val))}"
-        pattern = rf"^{re.escape(key)}\s*=\s*.*$"
-        if re.search(pattern, src, flags=re.MULTILINE):
-            return re.sub(pattern, rep, src, flags=re.MULTILINE)
-        return src + "\n" + rep + "\n"
-
-    new_text = upsert_bool(new_text, "DIAGNOSTICS_ENABLED", diagnostics_enabled)
-    new_text = upsert_bool(new_text, "DIAGNOSTICS_ZIP_ON_EXIT", diagnostics_zip)
-
     CONFIG_PATH.write_text(new_text, encoding="utf-8")
     return True
 
@@ -123,8 +99,6 @@ class App(tk.Tk):
         self.current_title = tk.StringVar(value="(not fetched)")
         self.config_title = tk.StringVar(value=read_config_value())
         self.disable_focus = tk.BooleanVar(value=False)
-        self.diagnostics_enabled = tk.BooleanVar(value=read_config_bool("DIAGNOSTICS_ENABLED", False))
-        self.diagnostics_zip = tk.BooleanVar(value=read_config_bool("DIAGNOSTICS_ZIP_ON_EXIT", False))
 
         self._build_ui()
 
@@ -146,8 +120,6 @@ class App(tk.Tk):
         row3 = ttk.Frame(self)
         row3.pack(fill="x", **pad)
         ttk.Checkbutton(row3, text="Disable focus check (set to None)", variable=self.disable_focus).pack(side="left")
-        ttk.Checkbutton(row3, text="Enable diagnostics dump", variable=self.diagnostics_enabled).pack(side="left", padx=10)
-        ttk.Checkbutton(row3, text="Zip on exit", variable=self.diagnostics_zip).pack(side="left", padx=6)
         ttk.Button(row3, text="Save to config", command=self._save_config).pack(side="left", padx=10)
 
         row4 = ttk.Frame(self)
@@ -176,8 +148,6 @@ class App(tk.Tk):
         ok = write_config_value(
             self.config_title.get(),
             self.disable_focus.get(),
-            diagnostics_enabled=self.diagnostics_enabled.get(),
-            diagnostics_zip=self.diagnostics_zip.get(),
         )
         if ok:
             self.status.set("Saved settings to gop3_config.py")
@@ -277,11 +247,10 @@ class DebugWindow(tk.Toplevel):
         self.click_after_move = tk.BooleanVar(value=False)
         ttk.Checkbutton(box1, text="Click after move", variable=self.click_after_move).grid(row=0, column=0, columnspan=3, sticky="w", padx=8, pady=4)
 
-        ttk.Button(box1, text="Bet", command=lambda: self._move_to("bet")).grid(row=1, column=0, padx=6, pady=4)
-        ttk.Button(box1, text="Hit", command=lambda: self._move_to("hit")).grid(row=1, column=1, padx=6, pady=4)
-        ttk.Button(box1, text="Stand", command=lambda: self._move_to("stand")).grid(row=1, column=2, padx=6, pady=4)
-        ttk.Button(box1, text="Double", command=lambda: self._move_to("double")).grid(row=2, column=0, padx=6, pady=4)
-        ttk.Button(box1, text="Split", command=lambda: self._move_to("split")).grid(row=2, column=1, padx=6, pady=4)
+        ttk.Button(box1, text="Hit", command=lambda: self._move_to("hit")).grid(row=1, column=0, padx=6, pady=4)
+        ttk.Button(box1, text="Stand", command=lambda: self._move_to("stand")).grid(row=1, column=1, padx=6, pady=4)
+        ttk.Button(box1, text="Double", command=lambda: self._move_to("double")).grid(row=1, column=2, padx=6, pady=4)
+        ttk.Button(box1, text="Split", command=lambda: self._move_to("split")).grid(row=2, column=0, padx=6, pady=4)
 
         # Readouts
         box2 = ttk.LabelFrame(self, text="Live Read (From Screen)")
@@ -311,8 +280,6 @@ class DebugWindow(tk.Toplevel):
     def _pos_for(self, name: str):
         if not self.cfg:
             return None
-        if name == "bet":
-            return getattr(self.cfg, "BET_BUTTON_POSITION", None)
         positions = getattr(self.cfg, "BUTTON_POSITIONS", {}) or {}
         return positions.get(name)
 

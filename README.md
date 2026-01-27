@@ -6,9 +6,10 @@ A bot that plays blackjack using basic strategy ("the book") by reading the scre
 
 - Python 3.8+
 - Governor of Poker 3 visible on screen (calibration assumes a consistent UI layout)
-- OCR engine:
-  - **EasyOCR** (recommended) or
-  - **Tesseract** (optional; mainly used for card sanity-check)
+- Required Python packages (install with `pip install -r requirements.txt`): `pyautogui`, `pillow`, `opencv-python`, `numpy`, `mss`, `pytesseract`, `keyboard` (hotkey stop).
+- Optional OCR engines:
+  - **EasyOCR** when `OCR_ENGINE="easyocr"` (default). Install via `pip install -r requirements-optional.txt` — pulls Torch and is a large download.
+  - **Tesseract** CLI + `pytesseract` (already listed) for the card sanity-check path or when `OCR_ENGINE="tesseract"`. Install the OS package separately and ensure it is on `PATH`.
 
 ## Setup
 
@@ -16,8 +17,11 @@ A bot that plays blackjack using basic strategy ("the book") by reading the scre
 
 ```bash
 pip install -r requirements.txt
-pip install easyocr
+# Optional: enable EasyOCR path (heavy, installs Torch)
+pip install -r requirements-optional.txt
 ```
+
+If you prefer to avoid the EasyOCR install, switch `OCR_ENGINE` to `"tesseract"` in `gop3_config.py` and ensure the Tesseract executable is installed system-wide.
 
 ### 2. Start-to-Finish Guide (Recommended)
 
@@ -26,6 +30,7 @@ See `START_HERE.md` for:
 - Focus/title configuration (`GAME_WINDOW_TITLE`)
 - Coordinate calibration (`calibrate_positions.py`)
 - Running + verification expectations
+- A short pre-run `SANITY_CHECKLIST.md`
 
 ### 3. Test Detection (Calibration Images)
 
@@ -55,8 +60,6 @@ python gui_launcher.py
 
 - `--debug` or `-d`: Enable debug output (shows detection details)
 - `--test` or `-t`: Run single iteration for testing
-- `--auto-bet` or `-a`: Automatically place bets
-- `--bet 25k|50k|100k|200k`: Set bet amount when auto-betting
 
 ### Example
 
@@ -78,7 +81,7 @@ Or press **Ctrl+C** in the terminal.
 
 1. **Screen Capture**: Captures your screen using `mss`
 2. **Button Detection**: Finds HIT/STAND/DOUBLE/SPLIT buttons by their red-orange color
-3. **Card/Total Reading**: Uses Tesseract OCR to read the displayed hand total and dealer card
+3. **Card/Total Reading**: Uses OCR (EasyOCR or Tesseract, per `OCR_ENGINE`) to read the displayed hand total and dealer card
 4. **Strategy Lookup**: Determines optimal play from basic strategy tables
 5. **Action Execution**: Clicks the appropriate button using `pyautogui`
 
@@ -113,31 +116,8 @@ The bot follows standard basic strategy ("the book"):
 
 ### Wrong resolution
 - The bot is calibrated for 3440x1440
-- Edit `gop3_config.py` to adjust `BUTTON_REGION_Y_MIN/MAX` for different resolutions
+- Edit `gop3_config.py` to adjust `BUTTON_POSITIONS` and the `*_REGION` percentages for different resolutions
 
-## Diagnostics Dump Mode (for debugging / sharing a single bundle)
-
-The bot can optionally save per-iteration screenshots, ROIs, masks, OCR results, and JSON state to help debug detection.
-
-### Enable (GUI)
-
-Run `gui_launcher.py` (or the built launcher) and check:
-- "Enable diagnostics dump"
-- Optional: "Zip on exit"
-
-Then click "Save to config".
-
-### Enable (CLI)
-
-```bash
-# Save diagnostics to diagnostics/<timestamp>/
-python blackjack_bot.py --test --diag
-
-# Zip the session at exit
-python blackjack_bot.py --test --diag --diag-zip
-```
-
-### Output
-
-- Folder: `diagnostics/<YYYYMMDD_HHMMSS>/`
-- Optional zip: `diagnostics/<YYYYMMDD_HHMMSS>.zip`
+### Platform notes
+- Focus checks use Win32 APIs; on macOS/Linux, set `GAME_WINDOW_TITLE = None` to avoid clicks being blocked by the foreground-title check.
+- `pyautogui` needs an active display; on Linux set `$DISPLAY` (headless runs without X/VNC will fail).

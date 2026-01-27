@@ -4,13 +4,11 @@ Plays optimal basic strategy by reading the screen and clicking buttons.
 """
 
 import time
-import sys
-from enum import Enum
 
 import keyboard
 
 from screen_capture import GOP3Detector, GameController
-from basic_strategy import get_action, HARD_STRATEGY, SOFT_STRATEGY, PAIR_STRATEGY
+from basic_strategy import HARD_STRATEGY, SOFT_STRATEGY, PAIR_STRATEGY
 from config_loader import load_config
 
 config = load_config()
@@ -32,23 +30,14 @@ def _request_stop():
     print("\n[HOTKEY] Ctrl+Alt+J pressed - stopping bot...")
 
 
-class GamePhase(Enum):
-    BETTING = "betting"
-    PLAYER_TURN = "player_turn"
-    WAITING = "waiting"
-    UNKNOWN = "unknown"
-
-
 class BlackjackBot:
     """
     Bot that plays blackjack using basic strategy.
     Reads game state from screen and clicks appropriate buttons.
     """
 
-    def __init__(self, debug=False, auto_bet=False, bet_amount='25k'):
+    def __init__(self, debug=False):
         self.debug = debug
-        self.auto_bet = auto_bet
-        self.bet_amount = bet_amount
 
         self.detector = GOP3Detector(config)
         self.controller = GameController(click_delay=config.CLICK_DELAY)
@@ -95,8 +84,6 @@ class BlackjackBot:
         self.dealer_total_locked = False
         self.player_total_verified = False
         self.actions_in_round = 0
-        self.last_auto_bet_check = 0.0
-        self.auto_bet_checked = None
 
     def reset_round_cache(self):
         """Reset cached totals when a round ends."""
@@ -300,11 +287,6 @@ class BlackjackBot:
 
     def jitter_button_position(self, position):
         """Apply a small jitter to button positions to avoid clicking the exact same pixel."""
-        # Safety jitter disabled to avoid misclicks.
-        return position
-
-    def jitter_point(self, position, jitter=3):
-        """Apply small jitter to a generic point."""
         # Safety jitter disabled to avoid misclicks.
         return position
 
@@ -541,44 +523,6 @@ class BlackjackBot:
 
         return False
 
-    def ensure_auto_bet_enabled(self) -> bool:
-        """Ensure auto-bet checkbox is enabled."""
-        check_interval = getattr(config, 'AUTO_BET_CHECK_INTERVAL', 1.0)
-        now = time.time()
-        if now - self.last_auto_bet_check < check_interval:
-            return False
-        self.last_auto_bet_check = now
-
-        screen = self.detector.capture_game()
-        checked, position = self.detector.detect_auto_bet_checkbox(screen)
-        if checked is None or position is None:
-            self.log("Auto-bet checkbox not detected")
-            return False
-
-        self.auto_bet_checked = checked
-        if checked:
-            return False
-
-        jitter = getattr(config, 'AUTO_BET_JITTER', 3)
-        pos = self.jitter_point(position, jitter=jitter)
-        print(f"Auto-bet unchecked, enabling at {pos}...")
-        self.human_delay()
-        self.controller.click_button(pos)
-        self.last_action = 'auto_bet'
-        self.auto_bet_checked = True
-        return True
-
-    def place_bet(self) -> bool:
-        """Place a bet during betting phase using fixed position."""
-        if hasattr(config, 'BET_BUTTON_POSITION'):
-            pos = self.jitter_button_position(config.BET_BUTTON_POSITION)
-            print(f"Placing bet at {pos}...")
-            self.human_delay()  # Add human-like delay before clicking
-            self.controller.click_button(pos)
-            self.last_action = 'bet'  # Reset so first hit of new hand isn't "subsequent"
-            return True
-        return False
-
     def run_once(self) -> bool:
         """
         Execute one iteration of the bot loop.
@@ -606,11 +550,8 @@ class BlackjackBot:
                 self.waiting_for_total_update = False
 
         if phase == 'betting':
-            if self.auto_bet:
-                return self.ensure_auto_bet_enabled()
-            else:
-                self.log("Betting phase - waiting for manual bet")
-                return False
+            self.log("Betting phase - waiting for manual bet")
+            return False
 
         elif phase == 'player_turn':
             can_split = state['can_split']
@@ -639,8 +580,6 @@ class BlackjackBot:
                 return False
             if player_total == 21 and self.actions_in_round == 0:
                 self.log("Blackjack detected on initial deal")
-                if self.auto_bet:
-                    self.ensure_auto_bet_enabled()
                 return False
 
             # Determine and execute action
@@ -665,9 +604,6 @@ class BlackjackBot:
                 self.pending_player_soft = is_soft
                 self.waiting_for_total_update = True
                 return True
-
-        elif phase == 'waiting':
-            self.log("Waiting for next hand...")
 
         return False
 
@@ -734,60 +670,14 @@ def main():
         help='Enable debug output'
     )
     parser.add_argument(
-        '--auto-bet', '-a',
-        action='store_true',
-        help='Automatically place bets'
-    )
-    parser.add_argument(
-        '--bet',
-        default='25k',
-        choices=['25k', '50k', '100k', '200k'],
-        help='Bet amount when auto-betting'
-    )
-    parser.add_argument(
         '--test', '-t',
         action='store_true',
         help='Run single test iteration'
     )
-    parser.add_argument(
-        '--diag',
-        action='store_true',
-        help='Enable diagnostics dump (images + JSON) to DIAGNOSTICS_DIR'
-    )
-    parser.add_argument(
-        '--diag-zip',
-        action='store_true',
-        help='Zip diagnostics session at exit (implies --diag)'
-    )
-    parser.add_argument(
-        '--diag-every',
-        type=int,
-        default=None,
-        help='Diagnostics: dump every N iterations (overrides DIAGNOSTICS_EVERY_N)'
-    )
-    parser.add_argument(
-        '--diag-max-iters',
-        type=int,
-        default=None,
-        help='Diagnostics: max iterations per session (overrides DIAGNOSTICS_MAX_ITERS)'
-    )
 
     args = parser.parse_args()
 
-    if args.diag or args.diag_zip:
-        setattr(config, "DIAGNOSTICS_ENABLED", True)
-    if args.diag_zip:
-        setattr(config, "DIAGNOSTICS_ZIP_ON_EXIT", True)
-    if args.diag_every is not None:
-        setattr(config, "DIAGNOSTICS_EVERY_N", int(args.diag_every))
-    if args.diag_max_iters is not None:
-        setattr(config, "DIAGNOSTICS_MAX_ITERS", int(args.diag_max_iters))
-
-    bot = BlackjackBot(
-        debug=args.debug,
-        auto_bet=args.auto_bet,
-        bet_amount=args.bet
-    )
+    bot = BlackjackBot(debug=args.debug)
 
     if args.test:
         print("Running single test...")

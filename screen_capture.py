@@ -9,7 +9,6 @@ import mss
 import pyautogui
 import time
 import ctypes
-import os
 import re
 from pathlib import Path
 from typing import Optional, Dict, Any
@@ -994,98 +993,6 @@ class GOP3Detector:
 
         # Fallback to empty dict if no fixed positions
         return {}
-
-    def detect_auto_bet_checkbox(self, screen, diag: Optional["DiagnosticIteration"] = None) -> tuple:
-        """
-        Detect the auto-bet checkbox state and position.
-
-        Returns:
-            (checked: bool or None, position: (x, y) or None)
-        """
-        region = getattr(self.config, 'AUTO_BET_SEARCH_REGION', None)
-        if not region:
-            return (None, None)
-
-        h, w = screen.shape[:2]
-        rx1 = int(w * region['x_percent'][0])
-        rx2 = int(w * region['x_percent'][1])
-        ry1 = int(h * region['y_percent'][0])
-        ry2 = int(h * region['y_percent'][1])
-
-        roi = screen[ry1:ry2, rx1:rx2]
-        if roi.size == 0:
-            return (None, None)
-        self._diag_save(
-            diag,
-            image_name="auto_bet_roi.png",
-            image=roi,
-            json_name="auto_bet_roi.json",
-            json_obj={"rx1": rx1, "ry1": ry1, "rx2": rx2, "ry2": ry2},
-        )
-
-        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-        blur = cv2.GaussianBlur(gray, (3, 3), 0)
-        edges = cv2.Canny(blur, 50, 150)
-        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        min_dim = min(roi.shape[0], roi.shape[1])
-        min_size = max(getattr(self.config, 'AUTO_BET_BOX_MIN_SIZE', 14), int(min_dim * 0.08))
-        max_size = min(getattr(self.config, 'AUTO_BET_BOX_MAX_SIZE', 80), int(min_dim * 0.60))
-        aspect_min, aspect_max = getattr(self.config, 'AUTO_BET_BOX_ASPECT_RANGE', (0.75, 1.25))
-        x_min_ratio, x_max_ratio = getattr(self.config, 'AUTO_BET_BOX_X_RANGE', (0.30, 0.80))
-
-        best = None
-        for cnt in contours:
-            x, y, bw, bh = cv2.boundingRect(cnt)
-            if bw < min_size or bh < min_size or bw > max_size or bh > max_size:
-                continue
-            aspect = bw / float(bh) if bh else 0
-            if not (aspect_min <= aspect <= aspect_max):
-                continue
-
-            cx_ratio = (x + bw * 0.5) / float(roi.shape[1])
-            if not (x_min_ratio <= cx_ratio <= x_max_ratio):
-                continue
-
-            area = bw * bh
-            score = area * (1.0 - abs(aspect - 1.0))
-            if best is None or score > best[0]:
-                best = (score, x, y, bw, bh)
-
-        if best is None:
-            return (None, None)
-
-        _, x, y, bw, bh = best
-        abs_x = rx1 + x
-        abs_y = ry1 + y
-        cx = abs_x + bw // 2
-        cy = abs_y + bh // 2
-
-        pad_ratio = getattr(self.config, 'AUTO_BET_INNER_PAD_RATIO', 0.20)
-        pad = int(min(bw, bh) * pad_ratio)
-        inner = roi[y + pad:y + bh - pad, x + pad:x + bw - pad]
-        if inner.size == 0:
-            return (None, (cx, cy))
-        self._diag_save(diag, image_name="auto_bet_inner.png", image=inner)
-
-        inner_gray = cv2.cvtColor(inner, cv2.COLOR_BGR2GRAY)
-        bright_thresh = getattr(self.config, 'AUTO_BET_BRIGHT_THRESHOLD', 200)
-        bright_ratio = float((inner_gray > bright_thresh).mean())
-        check_ratio = getattr(self.config, 'AUTO_BET_CHECK_RATIO', 0.08)
-        checked = bright_ratio >= check_ratio
-
-        self._diag_save(
-            diag,
-            json_name="auto_bet_result.json",
-            json_obj={
-                "bright_ratio": float(bright_ratio),
-                "bright_thresh": float(bright_thresh),
-                "check_ratio": float(check_ratio),
-                "checked": bool(checked),
-                "center": [int(cx), int(cy)],
-            },
-        )
-        return (checked, (cx, cy))
 
     def detect_game_state(self, screen, diag: Optional["DiagnosticIteration"] = None) -> dict:
         """

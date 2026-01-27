@@ -23,9 +23,6 @@ BUTTON_POSITIONS = {
     'split': (1198, 1413),
 }
 
-# Bet button position (1K bet - leftmost bet button)
-BET_BUTTON_POSITION = (575, 1414)
-
 # Use fixed positions instead of detection
 USE_FIXED_BUTTONS = True
 
@@ -108,14 +105,6 @@ CLICK_VERIFY_RETRIES = 0
 CLICK_VERIFY_RETRY_ACTIONS = ("stand",)
 CLICK_VERIFY_LOG = True
 
-# Diagnostics dump (opt-in).
-# When enabled, the bot will save per-iteration screenshots/ROIs/JSON into DIAGNOSTICS_DIR.
-DIAGNOSTICS_ENABLED = False
-DIAGNOSTICS_DIR = "diagnostics"
-DIAGNOSTICS_EVERY_N = 1
-DIAGNOSTICS_MAX_ITERS = 300
-DIAGNOSTICS_ZIP_ON_EXIT = False
-
 # Foreground focus logging
 FOCUS_CHECK_LOG = True
 FOCUS_CHECK_LOG_INTERVAL = 1.0
@@ -187,20 +176,5 @@ TOTAL_READ_INTERVAL = 0.05  # Was 0.1
 READ_DEALER_CARD = False
 
 # Temporary safety switches
-DISABLE_SPLIT = True
-FORCE_HARD_HAND = True
-
-# Auto-bet checkbox detection
-AUTO_BET_SEARCH_REGION = {
-    'x_percent': (0.08, 0.40),
-    'y_percent': (0.73, 0.90),
-}
-AUTO_BET_BOX_ASPECT_RANGE = (0.75, 1.25)
-AUTO_BET_BOX_MIN_SIZE = 14
-AUTO_BET_BOX_MAX_SIZE = 80
-AUTO_BET_BOX_X_RANGE = (0.30, 0.80)
-AUTO_BET_INNER_PAD_RATIO = 0.20
-AUTO_BET_BRIGHT_THRESHOLD = 200
-AUTO_BET_CHECK_RATIO = 0.08
-AUTO_BET_JITTER = 3
-AUTO_BET_CHECK_INTERVAL = 1.0
+DISABLE_SPLIT = False
+FORCE_HARD_HAND = False

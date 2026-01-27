@@ -83,10 +83,6 @@ def main():
         positions['split'] = (positions['double'][0] + dx, positions['double'][1])
         print(f"    Estimated split position: {positions['split']}")
 
-    # Bet button
-    print("\n--- BET BUTTON ---")
-    positions['bet'] = get_click_position("Click on your preferred BET button")
-
     # Card/Total regions
     print("\n--- CARD DETECTION REGIONS ---")
     print("(Click on the CENTER of each area)")
@@ -125,9 +121,6 @@ BUTTON_POSITIONS = {{
     'double': {positions['double']},
     'split': {positions['split']},
 }}
-
-# Bet button position
-BET_BUTTON_POSITION = {positions['bet']}
 
 # Player total region
 PLAYER_TOTAL_REGION = {fmt_region(regions['player_total'])}
@@ -181,13 +174,6 @@ def update_config(positions, regions, screen_w, screen_h):
         new_buttons,
         content,
         flags=re.DOTALL
-    )
-
-    # Update bet button
-    content = re.sub(
-        r'BET_BUTTON_POSITION = \([^)]+\)',
-        f'BET_BUTTON_POSITION = {positions["bet"]}',
-        content
     )
 
     # Helper to format region

@@ -51,8 +51,7 @@ blackjack_bot.py
 
     2) Branch by phase:
        - phase == 'betting'
-           - if --auto-bet: ensure_auto_bet_enabled() (throttled by AUTO_BET_CHECK_INTERVAL)
-           - else: do nothing (wait for manual bet)
+           - do nothing (wait for manual bet)
 
        - phase == 'player_turn'
            - action = get_strategy_action(player_total, dealer_total, can_double, can_split, is_soft)
@@ -166,4 +165,3 @@ So a typical "player_turn" action might complete in roughly:
 
 3) PyAutoGUI failsafe:
    - pyautogui.FAILSAFE=True; moving mouse to top-left can abort/raise.
-

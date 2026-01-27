@@ -11,12 +11,14 @@ From the repo root:
 
 ```powershell
 pip install -r requirements.txt
-pip install easyocr
+# Optional: EasyOCR path (heavy Torch download)
+pip install -r requirements-optional.txt
 ```
 
 Notes:
-- `easyocr` is used when `OCR_ENGINE="easyocr"` in `gop3_config.py`.
-- Tesseract is optional now; it’s mainly used for the card sanity-check path.
+- `keyboard` is required for the `Ctrl+Alt+J` stop hotkey (part of `requirements.txt`).
+- `easyocr` is only needed when `OCR_ENGINE="easyocr"` (default). Skip it and set `OCR_ENGINE="tesseract"` if you want to avoid the Torch install.
+- Tesseract is optional; install the system binary + keep `pytesseract` (already listed) for the card sanity-check path or when using the Tesseract OCR mode.
 
 ## 1) Open The Game In The Right State
 Before calibrating or running:
@@ -85,7 +87,14 @@ What should happen in real time:
 - **Ctrl+Alt+J** stops the bot (hotkey).
 - Move mouse to the **top-left** corner triggers PyAutoGUI failsafe.
 
+
 ## Common “It Doesn’t Click” Causes
 - Game window title mismatch -> update `GAME_WINDOW_TITLE` via GUI.
 - Buttons not detected as visible -> re-calibrate or adjust HSV validation settings.
 - Game not foreground -> focus check blocks clicks (expected behavior).
+
+## Platform Caveats
+- Focus check uses Win32 APIs; on macOS/Linux, set `GAME_WINDOW_TITLE = None` if you hit blocked-click warnings.
+- `pyautogui` needs an active display. On Linux, make sure `$DISPLAY` is set (headless runs without X/VNC will fail).
+
+For a quick pre-run sweep, see `SANITY_CHECKLIST.md`.
