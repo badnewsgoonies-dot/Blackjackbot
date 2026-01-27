@@ -89,6 +89,7 @@ class GOP3Detector:
             threshold=getattr(config, "AUTO_CALIBRATION_THRESHOLD", 0.75),
         )
         self._auto_cal_state = None
+        self.window_rect = None
         if self.tesseract_available:
             try:
                 pytesseract.get_tesseract_version()
@@ -102,7 +103,12 @@ class GOP3Detector:
         """Capture the game screen."""
         if self.config.GAME_WINDOW:
             return self.capture.capture_screen(self.config.GAME_WINDOW)
-        return self.capture.capture_screen()
+        screen = self.capture.capture_screen()
+        self._ensure_calibrated(screen)
+        if self.window_rect:
+            x1, y1, x2, y2 = self.window_rect
+            return screen[y1:y2, x1:x2]
+        return screen
 
     def _ensure_calibrated(self, screen) -> None:
         if not self.auto_cal.enabled:
@@ -110,11 +116,16 @@ class GOP3Detector:
         if self.auto_cal.transform is not None:
             return
         transform = self.auto_cal.calibrate(screen)
+        if transform and self.window_rect is None:
+            self.window_rect = self.auto_cal.estimate_window_rect(screen)
         state = self.auto_cal.status
         if state != self._auto_cal_state:
             if state == "ok" and transform:
                 anchors = ", ".join(a.name for a in transform.anchors)
-                print(f"[INFO] Auto-calibration OK (scale={transform.scale:.3f}) anchors=[{anchors}]")
+                if self.window_rect:
+                    print(f"[INFO] Auto-calibration OK (scale={transform.scale:.3f}) anchors=[{anchors}] window={self.window_rect}")
+                else:
+                    print(f"[INFO] Auto-calibration OK (scale={transform.scale:.3f}) anchors=[{anchors}]")
             elif state in ("no_match", "bad_scale"):
                 print("[WARN] Auto-calibration unavailable; falling back to screen scaling.")
             self._auto_cal_state = state

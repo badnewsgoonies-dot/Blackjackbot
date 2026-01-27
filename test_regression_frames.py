@@ -40,6 +40,7 @@ def main():
         if img is None:
             continue
         transform = calibrator.calibrate(img)
+        window_rect = calibrator.estimate_window_rect(img) if transform else None
         total += 1
 
         if calibrator.enabled and calibrator.status not in ("ok", "no_match", "bad_scale", "bad_transform"):
@@ -48,8 +49,14 @@ def main():
 
         # ROIs should exist when total regions are configured
         if config.PLAYER_TOTAL_REGION and config.DEALER_TOTAL_REGION:
-            player_rect = calibrator.region_rect(getattr(config, "PLAYER_TOTAL_REGION"), img.shape)
-            dealer_rect = calibrator.region_rect(getattr(config, "DEALER_TOTAL_REGION"), img.shape)
+            if window_rect:
+                x1, y1, x2, y2 = window_rect
+                sub = img[y1:y2, x1:x2]
+                shape = sub.shape
+            else:
+                shape = img.shape
+            player_rect = calibrator.region_rect(getattr(config, "PLAYER_TOTAL_REGION"), shape)
+            dealer_rect = calibrator.region_rect(getattr(config, "DEALER_TOTAL_REGION"), shape)
             if player_rect == (0, 0, 0, 0) or dealer_rect == (0, 0, 0, 0):
                 failures.append((path.name, "bad_roi"))
                 continue

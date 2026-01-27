@@ -133,7 +133,8 @@ The bot follows standard basic strategy ("the book"):
 - Template mode now uses `timing_frames/` as its source when building digit templates (`TEMPLATE_TOTALS_PATH`).
 - HUD overlay shows `cal:` status and `vis:` status (visual stability gate) while the bot runs.
 - GUI includes a **Test anchors** button that runs a no-click anchor + visual check on the current screen.
- - To disable auto-calibration, set `AUTO_CALIBRATION_ENABLED = False` in `gop3_config.py`.
+- To disable auto-calibration, set `AUTO_CALIBRATION_ENABLED = False` in `gop3_config.py`.
+- Auto-calibration also estimates the GOP3 window rectangle and crops capture to it when available (better for windowed play).
 
 ### Platform notes
 - Focus checks use Win32 APIs; on macOS/Linux, set `GAME_WINDOW_TITLE = None` to avoid clicks being blocked by the foreground-title check.

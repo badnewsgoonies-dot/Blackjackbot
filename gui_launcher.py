@@ -292,7 +292,11 @@ class App(tk.Tk):
         if self.auto_cal and screen is not None:
             transform = self.auto_cal.calibrate(screen)
             if transform:
-                self.status.set(f"Auto-calibration OK (scale={transform.scale:.3f}).")
+                window = self.auto_cal.estimate_window_rect(screen)
+                if window:
+                    self.status.set(f"Auto-calibration OK (scale={transform.scale:.3f}, window={window}).")
+                else:
+                    self.status.set(f"Auto-calibration OK (scale={transform.scale:.3f}).")
             else:
                 self.status.set("Auto-calibration unavailable; using scale-only preview.")
 

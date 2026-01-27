@@ -34,6 +34,7 @@ class Transform:
     offset_x: float
     offset_y: float
     anchors: List[AnchorMatch]
+    window_rect: Optional[Tuple[int, int, int, int]] = None
 
 
 ANCHOR_DEFS = [
@@ -195,6 +196,25 @@ class AutoCalibrator:
         self.transform = Transform(scale=scale, offset_x=offset_x, offset_y=offset_y, anchors=matches)
         self.status = "ok"
         return self.transform
+
+    def estimate_window_rect(self, screen, top_crop_px: int = 140) -> Optional[Tuple[int, int, int, int]]:
+        if cv2 is None:
+            return None
+        h, w = screen.shape[:2]
+        hsv = cv2.cvtColor(screen, cv2.COLOR_BGR2HSV)
+        mask = (hsv[:, :, 1] > 50) & (hsv[:, :, 2] > 40)
+        mask = mask.astype("uint8") * 255
+        mask[: min(top_crop_px, h), :] = 0
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return None
+        cnt = max(contours, key=cv2.contourArea)
+        x, y, bw, bh = cv2.boundingRect(cnt)
+        if bw < int(w * 0.4) or bh < int(h * 0.3):
+            return None
+        return (x, y, x + bw, y + bh)
 
     def apply_point(self, point: Tuple[int, int]) -> Tuple[int, int]:
         if not self.transform:
