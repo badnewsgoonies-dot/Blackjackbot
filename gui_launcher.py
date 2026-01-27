@@ -17,6 +17,7 @@ import importlib.util
 import keyboard
 
 from config_loader import get_external_config_path, load_config
+from auto_calibration import AutoCalibrator
 
 
 ROOT = Path(__file__).resolve().parent
@@ -112,6 +113,24 @@ class App(tk.Tk):
         self._start_thread = None
         self._start_event = None
         self._cancel_event = None
+        self.auto_cal = AutoCalibrator(enabled=True)
+
+    def _capture_screen_bgr(self):
+        try:
+            import pyautogui  # type: ignore
+        except Exception:
+            return None
+        try:
+            import cv2  # type: ignore
+            import numpy as np  # type: ignore
+        except Exception:
+            return None
+        try:
+            shot = pyautogui.screenshot()
+            bgr = cv2.cvtColor(np.array(shot), cv2.COLOR_RGB2BGR)
+            return bgr
+        except Exception:
+            return None
 
     def _bind_start_keys(self):
         try:
@@ -227,6 +246,8 @@ class App(tk.Tk):
             return point
         if not point:
             return point
+        if self.auto_cal and self.auto_cal.transform:
+            return self.auto_cal.apply_point(point)
         current_w, current_h = pyautogui.size()
         cfg = load_config()
         base_w = getattr(cfg, "SCREEN_WIDTH", current_w) or current_w
@@ -250,6 +271,11 @@ class App(tk.Tk):
         except Exception:
             return None
         w, h = pyautogui.size()
+        if self.auto_cal and self.auto_cal.transform:
+            x1, y1, x2, y2 = self.auto_cal.region_rect(region, (h, w, 3))
+            cx = int((x1 + x2) / 2.0)
+            cy = int((y1 + y2) / 2.0)
+            return (cx, cy)
         cx = int((region["x_percent"][0] + region["x_percent"][1]) / 2.0 * w)
         cy = int((region["y_percent"][0] + region["y_percent"][1]) / 2.0 * h)
         return (cx, cy)
@@ -260,6 +286,14 @@ class App(tk.Tk):
         except Exception:
             self.status.set("Preflight skipped: pyautogui unavailable.")
             return
+
+        screen = self._capture_screen_bgr()
+        if self.auto_cal and screen is not None:
+            transform = self.auto_cal.calibrate(screen)
+            if transform:
+                self.status.set(f"Auto-calibration OK (scale={transform.scale:.3f}).")
+            else:
+                self.status.set("Auto-calibration unavailable; using scale-only preview.")
 
         # If not Windows, warn and skip focus/overlay but still preview
         positions = getattr(load_config(), "BUTTON_POSITIONS", {}) or {}

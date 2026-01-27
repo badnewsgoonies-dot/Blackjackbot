@@ -32,13 +32,13 @@ See `START_HERE.md` for:
 - Running + verification expectations
 - A short pre-run `SANITY_CHECKLIST.md`
 
-### 3. Test Detection (Calibration Images)
+### 3. Test Detection (Reference Images)
 
 ```bash
 python test_detection.py
 ```
 
-This tests detection on the calibration images.
+This tests detection on the reference image folder. If `timing_frames/` exists it will use that; otherwise it falls back to `Calibration Images/`.
 
 ## Usage
 
@@ -84,6 +84,7 @@ Or press **Ctrl+C** in the terminal.
 3. **Card/Total Reading**: Uses OCR (EasyOCR or Tesseract, per `OCR_ENGINE`) to read the displayed hand total and dealer card
 4. **Strategy Lookup**: Determines optimal play from basic strategy tables
 5. **Action Execution**: Clicks the appropriate button using `pyautogui`
+6. **Auto-Calibration**: Matches anchor templates to derive scale/offset so clicks + ROIs stay aligned across resolutions
 
 ## Basic Strategy
 
@@ -116,7 +117,7 @@ The bot follows standard basic strategy ("the book"):
 - Check `screen_capture.py` for the pytesseract path setting
 
 ### Wrong resolution
-- The bot is calibrated for 3440x1440. Fixed button clicks auto-scale to your current screen size, but re-run calibration for best accuracy after resolution changes. Adjust `BUTTON_POSITIONS` / `*_REGION` if you keep a new layout.
+- The bot is calibrated for 2560x1440 and uses anchor-based auto-calibration to align clicks/ROIs. If anchors fail to match (theme or layout changes), it falls back to basic scaling. Re-run calibration or update `BUTTON_POSITIONS` / `*_REGION` for best accuracy.
 
 ### Platform notes
 - Focus checks use Win32 APIs; on macOS/Linux, set `GAME_WINDOW_TITLE = None` to avoid clicks being blocked by the foreground-title check.

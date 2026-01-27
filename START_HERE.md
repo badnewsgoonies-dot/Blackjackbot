@@ -53,6 +53,7 @@ In the calibration console:
 2) Press **ENTER** to capture the coordinates.
 3) At the end, answer **y** to update the config file.
 If you change resolution, fixed button clicks will auto-scale, but rerun calibration for best accuracy.
+Auto-calibration uses anchor templates (see `anchors/`) to align clicks/ROIs across resolutions; if anchors don’t match (theme/layout changes), it falls back to basic scaling.
 
 What the code does (and where):
 - `calibrate_positions.py` captures pixel coordinates via `pyautogui.position()`.

@@ -1,6 +1,6 @@
 """
 Configuration for Governor of Poker 3 - calibrated from screenshots.
-Screen resolution: 3440x1440
+Screen resolution: 2560x1440
 """
 
 # Game window - set to None to capture full screen
@@ -10,25 +10,28 @@ GAME_WINDOW = None
 GAME_WINDOW_TITLE = "Governor of Poker 3"
 
 # Screen resolution (for reference)
-SCREEN_WIDTH = 3200
-SCREEN_HEIGHT = 1800
+SCREEN_WIDTH = 2560
+SCREEN_HEIGHT = 1440
 
 # Fixed button positions (pixel coordinates)
 # These are the exact center positions of each button
 # Adjusted +80 pixels right and -80 pixels up (diagonally up-right)
 BUTTON_POSITIONS = {
-    'hit': (570, 1416),
-    'stand': (788, 1414),
-    'double': (986, 1411),
-    'split': (1198, 1413),
+    'hit': (456, 1133),
+    'stand': (630, 1131),
+    'double': (789, 1129),
+    'split': (958, 1130),
 }
 
 # Use fixed positions instead of detection
 USE_FIXED_BUTTONS = True
 
+# Anchor-based auto-calibration (uses timing_frames anchors)
+AUTO_CALIBRATION_ENABLED = True
+
 # Click jitter settings for button presses
 BUTTON_JITTER_X = 6  # +/- pixels from the configured X
-BUTTON_JITTER_Y_RANGE = (1408, 1420)  # Random Y between these values (match button positions)
+BUTTON_JITTER_Y_RANGE = (1126, 1136)  # Random Y between these values (match button positions)
 
 # Mouse movement behavior (human-like)
 MOUSE_MOVE_MIN = 0.18

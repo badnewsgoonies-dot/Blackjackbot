@@ -1,6 +1,6 @@
 """
 Screen capture and detection for Governor of Poker 3.
-Optimized for 3440x1440 resolution based on calibration images.
+Optimized for 2560x1440 resolution with anchor-based auto-calibration.
 """
 
 import cv2
@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 
 from config_loader import load_config
+from auto_calibration import AutoCalibrator
 
 config = load_config()
 
@@ -83,6 +84,8 @@ class GOP3Detector:
         self.button_scale_warned = False
         self.window_region_warned = False
         self.template_ready = False
+        self.auto_cal = AutoCalibrator(enabled=getattr(config, "AUTO_CALIBRATION_ENABLED", True))
+        self._auto_cal_state = None
         if self.tesseract_available:
             try:
                 pytesseract.get_tesseract_version()
@@ -97,6 +100,33 @@ class GOP3Detector:
         if self.config.GAME_WINDOW:
             return self.capture.capture_screen(self.config.GAME_WINDOW)
         return self.capture.capture_screen()
+
+    def _ensure_calibrated(self, screen) -> None:
+        if not self.auto_cal.enabled:
+            return
+        if self.auto_cal.transform is not None:
+            return
+        transform = self.auto_cal.calibrate(screen)
+        state = self.auto_cal.status
+        if state != self._auto_cal_state:
+            if state == "ok" and transform:
+                anchors = ", ".join(a.name for a in transform.anchors)
+                print(f"[INFO] Auto-calibration OK (scale={transform.scale:.3f}) anchors=[{anchors}]")
+            elif state in ("no_match", "bad_scale"):
+                print("[WARN] Auto-calibration unavailable; falling back to screen scaling.")
+            self._auto_cal_state = state
+
+    def _region_rect(self, screen, region_cfg):
+        if not region_cfg:
+            return None
+        if self.auto_cal.transform:
+            return self.auto_cal.region_rect(region_cfg, screen.shape)
+        h, w = screen.shape[:2]
+        x1 = int(w * region_cfg["x_percent"][0])
+        x2 = int(w * region_cfg["x_percent"][1])
+        y1 = int(h * region_cfg["y_percent"][0])
+        y2 = int(h * region_cfg["y_percent"][1])
+        return x1, y1, x2, y2
 
     def _diag_save(
         self,
@@ -651,13 +681,11 @@ class GOP3Detector:
         Returns:
             (total, is_soft) or (None, False) if not detected
         """
-        h, w = screen.shape[:2]
-
-        # Get player total region from config
-        x1 = int(w * self.config.PLAYER_TOTAL_REGION['x_percent'][0])
-        x2 = int(w * self.config.PLAYER_TOTAL_REGION['x_percent'][1])
-        y1 = int(h * self.config.PLAYER_TOTAL_REGION['y_percent'][0])
-        y2 = int(h * self.config.PLAYER_TOTAL_REGION['y_percent'][1])
+        self._ensure_calibrated(screen)
+        rect = self._region_rect(screen, self.config.PLAYER_TOTAL_REGION)
+        if not rect:
+            return (None, False)
+        x1, y1, x2, y2 = rect
 
         roi = screen[y1:y2, x1:x2]
         self._diag_save(
@@ -690,13 +718,12 @@ class GOP3Detector:
         Returns:
             Total as int or None
         """
-        h, w = screen.shape[:2]
-
+        self._ensure_calibrated(screen)
         region = getattr(self.config, 'DEALER_TOTAL_REGION', self.config.DEALER_CARD_REGION)
-        x1 = int(w * region['x_percent'][0])
-        x2 = int(w * region['x_percent'][1])
-        y1 = int(h * region['y_percent'][0])
-        y2 = int(h * region['y_percent'][1])
+        rect = self._region_rect(screen, region)
+        if not rect:
+            return None
+        x1, y1, x2, y2 = rect
 
         roi = screen[y1:y2, x1:x2]
         self._diag_save(
@@ -733,15 +760,14 @@ class GOP3Detector:
         if not self.tesseract_available:
             return (None, False, [])
 
-        h, w = screen.shape[:2]
+        self._ensure_calibrated(screen)
         region = getattr(self.config, 'PLAYER_CARD_REGION', None)
         if not region:
             return (None, False, [])
-
-        x1 = int(w * region['x_percent'][0])
-        x2 = int(w * region['x_percent'][1])
-        y1 = int(h * region['y_percent'][0])
-        y2 = int(h * region['y_percent'][1])
+        rect = self._region_rect(screen, region)
+        if not rect:
+            return (None, False, [])
+        x1, y1, x2, y2 = rect
 
         roi = screen[y1:y2, x1:x2]
         if roi.size == 0:
@@ -837,13 +863,11 @@ class GOP3Detector:
             # Without OCR, we can't read the dealer card
             return None
 
-        h, w = screen.shape[:2]
-
-        # Get dealer card region from config
-        x1 = int(w * self.config.DEALER_CARD_REGION['x_percent'][0])
-        x2 = int(w * self.config.DEALER_CARD_REGION['x_percent'][1])
-        y1 = int(h * self.config.DEALER_CARD_REGION['y_percent'][0])
-        y2 = int(h * self.config.DEALER_CARD_REGION['y_percent'][1])
+        self._ensure_calibrated(screen)
+        rect = self._region_rect(screen, self.config.DEALER_CARD_REGION)
+        if not rect:
+            return None
+        x1, y1, x2, y2 = rect
 
         roi = screen[y1:y2, x1:x2]
 
@@ -895,6 +919,7 @@ class GOP3Detector:
         Returns:
             Dict of button_name -> (x, y) center position
         """
+        self._ensure_calibrated(screen)
         # Use fixed button positions from config
         if hasattr(self.config, 'USE_FIXED_BUTTONS') and self.config.USE_FIXED_BUTTONS:
             positions = dict(self.config.BUTTON_POSITIONS)
@@ -903,18 +928,29 @@ class GOP3Detector:
                 print("[WARN] GAME_WINDOW is set; fixed button positions assume full-screen coordinates. Recalibrate or clear GAME_WINDOW to avoid misclicks.")
                 self.window_region_warned = True
 
-            base_w = getattr(self.config, "SCREEN_WIDTH", None) or w
-            base_h = getattr(self.config, "SCREEN_HEIGHT", None) or h
-            scale_x = w / float(base_w) if base_w else 1.0
-            scale_y = h / float(base_h) if base_h else 1.0
-            if abs(scale_x - 1.0) > 0.01 or abs(scale_y - 1.0) > 0.01:
-                if not self.button_scale_warned:
-                    print(f"[WARN] Scaling button positions from {base_w}x{base_h} to {w}x{h} (sx={scale_x:.2f}, sy={scale_y:.2f})")
-                    self.button_scale_warned = True
+            scale_x = scale_y = 1.0
+            if self.auto_cal.transform:
+                scale_x = scale_y = self.auto_cal.transform.scale
                 positions = {
-                    name: (int(round(x * scale_x)), int(round(y * scale_y)))
+                    name: self.auto_cal.apply_point((x, y))
                     for name, (x, y) in positions.items()
                 }
+                if not self.button_scale_warned:
+                    print(f"[INFO] Buttons using auto-calibration scale={scale_x:.3f}")
+                    self.button_scale_warned = True
+            else:
+                base_w = getattr(self.config, "SCREEN_WIDTH", None) or w
+                base_h = getattr(self.config, "SCREEN_HEIGHT", None) or h
+                scale_x = w / float(base_w) if base_w else 1.0
+                scale_y = h / float(base_h) if base_h else 1.0
+                if abs(scale_x - 1.0) > 0.01 or abs(scale_y - 1.0) > 0.01:
+                    if not self.button_scale_warned:
+                        print(f"[WARN] Scaling button positions from {base_w}x{base_h} to {w}x{h} (sx={scale_x:.2f}, sy={scale_y:.2f})")
+                        self.button_scale_warned = True
+                    positions = {
+                        name: (int(round(x * scale_x)), int(round(y * scale_y)))
+                        for name, (x, y) in positions.items()
+                    }
 
             if not getattr(self.config, 'ENABLE_BUTTON_COLOR_VALIDATION', False):
                 return positions

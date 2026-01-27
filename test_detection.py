@@ -1,5 +1,5 @@
 """
-Test script to verify detection is working on calibration images.
+Test script to verify detection on reference images.
 """
 
 import cv2
@@ -60,7 +60,7 @@ def _bbox_to_region(bbox, shape, pad_px):
 
 
 def auto_tune_regions(ref_image_path):
-    """Mutate config in-memory so calibration-image tests use correct ROIs."""
+    """Mutate config in-memory so reference-image tests use correct ROIs."""
     img = cv2.imread(ref_image_path)
     if img is None:
         raise RuntimeError(f"Could not load reference image: {ref_image_path}")
@@ -68,7 +68,7 @@ def auto_tune_regions(ref_image_path):
     hsv_lower = getattr(config, 'BLUE_CIRCLE_HSV_LOWER', (45, 20, 170))
     hsv_upper = getattr(config, 'BLUE_CIRCLE_HSV_UPPER', (130, 160, 255))
 
-    # Broad search windows for the circles in the calibration screenshots.
+    # Broad search windows for the circles in the reference screenshots.
     player_bbox = _find_best_circle_bbox(
         img,
         y_frac=(0.45, 0.95),
@@ -99,7 +99,7 @@ def auto_tune_regions(ref_image_path):
     # The player circle crops in these images can be wide; loosen aspect constraint.
     config.BLUE_CIRCLE_ASPECT_RANGE = (0.4, 3.6)
 
-    print("Auto-tuned ROIs for calibration images:")
+    print("Auto-tuned ROIs for reference images:")
     print(f"  PLAYER_TOTAL_REGION: {config.PLAYER_TOTAL_REGION}")
     print(f"  DEALER_TOTAL_REGION: {config.DEALER_TOTAL_REGION}")
 
@@ -159,8 +159,21 @@ def test_on_image(image_path, detector):
     return state
 
 
+def _default_image_dir():
+    if os.path.isdir("timing_frames"):
+        return "timing_frames"
+    return "Calibration Images"
+
+
+def _default_ref_image(image_dir):
+    if image_dir == "timing_frames":
+        return os.path.join(image_dir, "frame_00022_4.67s.png")
+    return os.path.join(image_dir, "Hit_Stand_Double_Phase.png")
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Run GOP3 detector on calibration images.")
+    default_dir = _default_image_dir()
+    parser = argparse.ArgumentParser(description="Run GOP3 detector on reference images.")
     parser.add_argument(
         "--auto-roi",
         action="store_true",
@@ -168,19 +181,19 @@ def main():
     )
     parser.add_argument(
         "--ref-image",
-        default=os.path.join("Calibration Images", "Hit_Stand_Double_Phase.png"),
+        default=_default_ref_image(default_dir),
         help="Reference image used to auto-tune ROIs (must show both circles).",
     )
     args = parser.parse_args()
 
     print("GOP3 Detection Test")
-    print("Testing on calibration images...")
+    print(f"Testing on images from: {default_dir}")
 
     if args.auto_roi:
         auto_tune_regions(args.ref_image)
 
     detector = GOP3Detector(config)
-    calibration_dir = "Calibration Images"
+    calibration_dir = default_dir
 
     results = []
     for root, _, files in os.walk(calibration_dir):
