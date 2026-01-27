@@ -422,6 +422,9 @@ class DebugWindow(tk.Toplevel):
         self.player_out = tk.StringVar(value="player: (not read yet)")
         self.dealer_out = tk.StringVar(value="dealer: (not read yet)")
         self.status = tk.StringVar(value="")
+        self._read_busy = False
+        self._btn_read_player = None
+        self._btn_read_dealer = None
 
         self._build_ui()
         self._reload_config()
@@ -450,10 +453,12 @@ class DebugWindow(tk.Toplevel):
         box2 = ttk.LabelFrame(self, text="Live Read (From Screen)")
         box2.pack(fill="x", **pad)
 
-        ttk.Button(box2, text="Read player total", command=self._read_player).grid(row=0, column=0, padx=6, pady=4, sticky="w")
+        self._btn_read_player = ttk.Button(box2, text="Read player total", command=self._read_player)
+        self._btn_read_player.grid(row=0, column=0, padx=6, pady=4, sticky="w")
         ttk.Label(box2, textvariable=self.player_out, width=40).grid(row=0, column=1, padx=6, pady=4, sticky="w")
 
-        ttk.Button(box2, text="Read dealer total", command=self._read_dealer).grid(row=1, column=0, padx=6, pady=4, sticky="w")
+        self._btn_read_dealer = ttk.Button(box2, text="Read dealer total", command=self._read_dealer)
+        self._btn_read_dealer.grid(row=1, column=0, padx=6, pady=4, sticky="w")
         ttk.Label(box2, textvariable=self.dealer_out, width=40).grid(row=1, column=1, padx=6, pady=4, sticky="w")
 
         ttk.Label(self, textvariable=self.status, foreground="#444").pack(fill="x", **pad)
@@ -516,32 +521,64 @@ class DebugWindow(tk.Toplevel):
         except Exception as exc:
             self.status.set(f"Move/click failed: {exc}")
 
+    def _set_read_busy(self, busy: bool):
+        self._read_busy = busy
+        state = "disabled" if busy else "normal"
+        if self._btn_read_player is not None:
+            self._btn_read_player.configure(state=state)
+        if self._btn_read_dealer is not None:
+            self._btn_read_dealer.configure(state=state)
+
     def _read_player(self):
         if not self.detector:
             self.status.set("Detector not initialized (reload config).")
             return
-        try:
-            screen = self.detector.capture_game()
-            total, is_soft = self.detector.detect_player_total(screen)
-            if total is None:
-                self.player_out.set("player: None")
-            else:
-                self.player_out.set(f"player: {'soft' if is_soft else 'hard'} {total}")
-            self.status.set("Player read complete.")
-        except Exception as exc:
-            self.status.set(f"Player read failed: {exc}")
+        if self._read_busy:
+            self.status.set("Read in progress...")
+            return
+        self._set_read_busy(True)
+        self.status.set("Reading player total...")
+
+        def work():
+            try:
+                screen = self.detector.capture_game()
+                total, is_soft = self.detector.detect_player_total(screen)
+                if total is None:
+                    msg = "player: None"
+                else:
+                    msg = f"player: {'soft' if is_soft else 'hard'} {total}"
+                self.after(0, lambda: self.player_out.set(msg))
+                self.after(0, lambda: self.status.set("Player read complete."))
+            except Exception as exc:
+                self.after(0, lambda: self.status.set(f"Player read failed: {exc}"))
+            finally:
+                self.after(0, lambda: self._set_read_busy(False))
+
+        threading.Thread(target=work, daemon=True).start()
 
     def _read_dealer(self):
         if not self.detector:
             self.status.set("Detector not initialized (reload config).")
             return
-        try:
-            screen = self.detector.capture_game()
-            total = self.detector.detect_dealer_total(screen)
-            self.dealer_out.set(f"dealer: {total if total is not None else 'None'}")
-            self.status.set("Dealer read complete.")
-        except Exception as exc:
-            self.status.set(f"Dealer read failed: {exc}")
+        if self._read_busy:
+            self.status.set("Read in progress...")
+            return
+        self._set_read_busy(True)
+        self.status.set("Reading dealer total...")
+
+        def work():
+            try:
+                screen = self.detector.capture_game()
+                total = self.detector.detect_dealer_total(screen)
+                msg = f"dealer: {total if total is not None else 'None'}"
+                self.after(0, lambda: self.dealer_out.set(msg))
+                self.after(0, lambda: self.status.set("Dealer read complete."))
+            except Exception as exc:
+                self.after(0, lambda: self.status.set(f"Dealer read failed: {exc}"))
+            finally:
+                self.after(0, lambda: self._set_read_busy(False))
+
+        threading.Thread(target=work, daemon=True).start()
 
 
 class HUDOverlay(tk.Toplevel):
