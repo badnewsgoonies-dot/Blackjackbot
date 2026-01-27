@@ -101,6 +101,8 @@ class BlackjackBot:
         self.last_bet_click_at = 0.0
         self.last_phase = None
         self.bet_attempts_in_phase = 0
+        self.waiting_for_bet_screen = False
+        self.waiting_for_bet_since = 0.0
 
     def reset_round_cache(self):
         """Reset cached totals when a round ends."""
@@ -110,6 +112,9 @@ class BlackjackBot:
         self.dealer_total_locked = False
         self.player_total_verified = False
         self.actions_in_round = 0
+        self.waiting_for_total_update = False
+        self.waiting_for_bet_screen = False
+        self.waiting_for_bet_since = 0.0
 
     def log(self, message):
         """Print message if debug mode enabled."""
@@ -729,7 +734,19 @@ class BlackjackBot:
             else:
                 self.waiting_for_total_update = False
 
+        if self.waiting_for_bet_screen:
+            bet_ready = phase == 'betting' and bool(state.get("betting_ui", False))
+            if bet_ready:
+                self.waiting_for_bet_screen = False
+                self.waiting_for_bet_since = 0.0
+            else:
+                self.log("Waiting for bet screen after stand/double...")
+                return False
+
         if phase == 'betting':
+            if getattr(config, "BRING_WINDOW_TO_FRONT", False):
+                self.detector.ensure_game_window_foreground()
+
             if self.auto_bet:
                 return self.ensure_auto_bet_enabled()
 
@@ -738,6 +755,10 @@ class BlackjackBot:
                     return True
 
             if self.click_bet:
+                if getattr(config, "ENSURE_BET_SCREEN", True):
+                    if not self.detector.wait_for_betting_ui():
+                        self.log("Bet screen not ready; waiting")
+                        return False
                 # Avoid spamming the bet button while the hand is transitioning/dealing.
                 grace = float(getattr(config, "DEALING_GRACE_SEC", 2.0))
                 now = time.time()
@@ -815,7 +836,16 @@ class BlackjackBot:
                 self.hands_played += 1
                 self.pending_player_total = player_total
                 self.pending_player_soft = is_soft
-                self.waiting_for_total_update = True
+                if action == 'hit':
+                    self.waiting_for_total_update = True
+                    self.waiting_for_bet_screen = False
+                    self.waiting_for_bet_since = 0.0
+                elif action in ('stand', 'double'):
+                    self.waiting_for_total_update = False
+                    self.waiting_for_bet_screen = True
+                    self.waiting_for_bet_since = time.time()
+                else:
+                    self.waiting_for_total_update = True
                 return True
 
         elif phase in ('waiting', 'dealer_turn'):
@@ -854,6 +884,8 @@ class BlackjackBot:
                     delay = float(getattr(config, "POST_CLICK_DELAY", 0.3))
                     if self.last_action == "bet":
                         delay = float(getattr(config, "POST_BET_DELAY", delay))
+                    elif self.last_action in ("hit", "stand", "double"):
+                        delay = float(getattr(config, "POST_ACTION_DELAY", 0.02))
                     time.sleep(max(0.0, delay))
                 else:
                     base = float(getattr(config, "SCAN_INTERVAL", 0.1))

@@ -13,6 +13,12 @@ GAME_WINDOW_TITLE = None
 # If enabled, the detector will try to find a visible window whose title contains GAME_WINDOW_TITLE.
 USE_WINDOW_CAPTURE = False
 
+# Window focus helpers
+GAME_WINDOW_TITLE_HINT = "GOP3"
+BRING_WINDOW_TO_FRONT = True
+BRING_WINDOW_TO_FRONT_INTERVAL = 0.8
+BRING_WINDOW_TO_FRONT_LOG = True
+
 # Screen resolution (for reference)
 SCREEN_WIDTH = 3200
 SCREEN_HEIGHT = 1800
@@ -94,20 +100,21 @@ CARD_RANKS = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K']
 DECISION_DELAY = 0.0    # Delay before making a decision
 CLICK_DELAY = 0.0       # Delay between clicks
 SCAN_INTERVAL = 0.1     # How often to scan the screen
-POST_CLICK_DELAY = 0.3  # Wait after clicking before next scan
+POST_CLICK_DELAY = 0.08  # Wait after clicking before next scan
 
 # Adaptive/event-driven scanning (recommended)
-BETTING_SCAN_INTERVAL = 0.4       # Slow poll while waiting to bet/deal
-WAITING_SCAN_INTERVAL = 0.4       # Slow poll while dealer plays / between hands
-PLAYER_TURN_SCAN_INTERVAL = 0.06  # Fast poll during player_turn (mostly cached reads)
+BETTING_SCAN_INTERVAL = 0.25       # Slow poll while waiting to bet/deal
+WAITING_SCAN_INTERVAL = 0.25       # Slow poll while dealer plays / between hands
+PLAYER_TURN_SCAN_INTERVAL = 0.04  # Fast poll during player_turn (mostly cached reads)
 
 # Action-specific post-click delays (animation settling)
 # Tuned from observed GOP3 timings (windowed, 100% DPI).
-POST_BET_DELAY = 3.4
+POST_BET_DELAY = 1.8
 POST_HIT_DELAY = 0.85
 POST_STAND_DELAY = 0.30
 POST_DOUBLE_DELAY = 0.90
 POST_SPLIT_DELAY = 1.00
+POST_ACTION_DELAY = 0.01
 
 # PyAutoGUI runtime behavior (lower = faster). This is applied in GameController.
 PYAUTOGUI_PAUSE = 0.02
@@ -165,6 +172,9 @@ BETTING_UI_USE_AUTO_BET = True
 # When using --click-bet, require the bet button to be detected as visible.
 # Set to False to always click the configured BET_BUTTON_POSITION during betting_ui.
 REQUIRE_BET_BUTTON_VISIBLE = False
+ENSURE_BET_SCREEN = True
+BET_SCREEN_MAX_WAIT = 4.0
+BET_SCREEN_INTERVAL = 0.08
 
 # Safety cap: stop taking actions if we exceed this many actions in one round.
 # (Helps avoid runaway loops if state is noisy.)
@@ -238,14 +248,14 @@ TEMPLATE_MAX_COMPONENTS = 6
 TEMPLATE_FALLBACK_TO_OCR = True
 
 # Total read synchronization
-TOTAL_READ_MAX_WAIT = 1.2
+TOTAL_READ_MAX_WAIT = 1.0
 TOTAL_READ_STABLE_COUNT = 1
-TOTAL_READ_INTERVAL = 0.06
+TOTAL_READ_INTERVAL = 0.05
 
 # Faster reads after actions (e.g., after HIT) while waiting for totals to change.
-TOTAL_READ_MAX_WAIT_AFTER_ACTION = 0.6
+TOTAL_READ_MAX_WAIT_AFTER_ACTION = 0.9
 TOTAL_READ_STABLE_COUNT_AFTER_ACTION = 1
-TOTAL_READ_INTERVAL_AFTER_ACTION = 0.03
+TOTAL_READ_INTERVAL_AFTER_ACTION = 0.02
 
 # Optional dealer up-card OCR (disable to speed up totals read)
 READ_DEALER_CARD = False

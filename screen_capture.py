@@ -107,15 +107,10 @@ class ScreenCapture:
         bgr, _origin = self.capture_screen_with_origin(region)
         return bgr
 
-    def capture_window_by_title(self, title_substring: str):
-        """
-        Capture a window's client area by matching a substring in its title (Windows only).
-
-        Returns:
-            (img_bgr, (origin_left, origin_top)) or (None, None) if not found.
-        """
+    def find_window_by_title(self, title_substring: str):
+        """Return the best matching visible window by title substring."""
         if not title_substring:
-            return (None, None)
+            return None
 
         user32 = ctypes.windll.user32
 
@@ -166,14 +161,90 @@ class ScreenCapture:
         try:
             user32.EnumWindows(enum_proc, 0)
         except Exception:
-            return (None, None)
+            return None
 
         if not matches:
+            return None
+
+        matches.sort(key=lambda m: (m[3] * m[4]), reverse=True)
+        return matches[0]
+
+    def is_window_foreground(self, title_substring: str) -> bool:
+        """Check whether the matched window is currently foreground."""
+        match = self.find_window_by_title(title_substring)
+        if not match:
+            return False
+        hwnd = int(match[0])
+        try:
+            fg = int(ctypes.windll.user32.GetForegroundWindow())
+            return fg == hwnd
+        except Exception:
+            return False
+
+    def bring_window_to_front(self, title_substring: str) -> bool:
+        """Best-effort bring-to-front by title substring (Windows only)."""
+        match = self.find_window_by_title(title_substring)
+        if not match:
+            return False
+
+        hwnd = int(match[0])
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+
+        SW_RESTORE = 9
+        HWND_TOPMOST = -1
+        HWND_NOTOPMOST = -2
+        SWP_NOMOVE = 0x0002
+        SWP_NOSIZE = 0x0001
+        SWP_SHOWWINDOW = 0x0040
+
+        try:
+            fg = int(user32.GetForegroundWindow())
+        except Exception:
+            fg = 0
+
+        try:
+            user32.ShowWindow(hwnd, SW_RESTORE)
+            user32.BringWindowToTop(hwnd)
+
+            fg_thread = user32.GetWindowThreadProcessId(fg, None) if fg else 0
+            cur_thread = kernel32.GetCurrentThreadId()
+            attached = False
+            if fg_thread and fg_thread != cur_thread:
+                try:
+                    attached = bool(user32.AttachThreadInput(cur_thread, fg_thread, True))
+                except Exception:
+                    attached = False
+
+            try:
+                user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
+                user32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
+                user32.SetForegroundWindow(hwnd)
+                user32.SetActiveWindow(hwnd)
+                user32.SetFocus(hwnd)
+            finally:
+                if attached:
+                    try:
+                        user32.AttachThreadInput(cur_thread, fg_thread, False)
+                    except Exception:
+                        pass
+        except Exception:
+            return False
+
+        return self.is_window_foreground(title_substring)
+
+    def capture_window_by_title(self, title_substring: str):
+        """
+        Capture a window's client area by matching a substring in its title (Windows only).
+
+        Returns:
+            (img_bgr, (origin_left, origin_top)) or (None, None) if not found.
+        """
+        match = self.find_window_by_title(title_substring)
+        if not match:
             return (None, None)
 
-        # If multiple match, prefer the largest client area.
-        matches.sort(key=lambda m: (m[3] * m[4]), reverse=True)
-        _hwnd, left, top, width, height, _title = matches[0]
+        _hwnd, left, top, width, height, _title = match
         img, origin = self.capture_screen_with_origin((left, top, width, height))
         return img, origin
 
@@ -194,6 +265,7 @@ class GOP3Detector:
         self.tesseract_available = TESSERACT_AVAILABLE
         self.digit_templates = {}
         self.template_ready = False
+        self._last_focus_attempt_at = 0.0
         if self.tesseract_available:
             try:
                 pytesseract.get_tesseract_version()
@@ -223,6 +295,54 @@ class GOP3Detector:
         img, origin = self.capture.capture_screen_with_origin()
         self.last_capture_origin = origin
         return img
+
+    def _focus_title(self) -> str:
+        title = getattr(self.config, "GAME_WINDOW_TITLE", None)
+        if title:
+            return str(title)
+        hint = getattr(self.config, "GAME_WINDOW_TITLE_HINT", "GOP3")
+        return str(hint) if hint else ""
+
+    def ensure_game_window_foreground(self, force: bool = False) -> bool:
+        if not bool(getattr(self.config, "BRING_WINDOW_TO_FRONT", False)):
+            return True
+        title = self._focus_title()
+        if not title:
+            return False
+
+        interval = float(getattr(self.config, "BRING_WINDOW_TO_FRONT_INTERVAL", 1.0))
+        now = time.time()
+        if not force and now - self._last_focus_attempt_at < interval:
+            return self.capture.is_window_foreground(title)
+
+        if self.capture.is_window_foreground(title):
+            return True
+
+        self._last_focus_attempt_at = now
+        ok = self.capture.bring_window_to_front(title)
+        if not ok and bool(getattr(self.config, "BRING_WINDOW_TO_FRONT_LOG", True)):
+            print(f"[WARN] Could not bring window to front for title '{title}'")
+        return ok
+
+    def wait_for_betting_ui(self, timeout: Optional[float] = None, interval: Optional[float] = None) -> bool:
+        timeout = float(timeout if timeout is not None else getattr(self.config, "BET_SCREEN_MAX_WAIT", 3.0))
+        interval = float(interval if interval is not None else getattr(self.config, "BET_SCREEN_INTERVAL", 0.12))
+
+        self.ensure_game_window_foreground()
+        start = time.time()
+        while time.time() - start < timeout:
+            screen = self.capture_game()
+            ui = self.detect_betting_ui(screen)
+            buttons = self.detect_buttons(screen)
+            required = tuple(getattr(self.config, "REQUIRE_BUTTONS_FOR_ACTION", ("hit", "stand")))
+            has_required_buttons = all(b in buttons for b in required) if required else bool(buttons)
+            player_total, _is_soft = self.detect_player_total(screen)
+            if ui.get("bet_button_visible", False):
+                return True
+            if ui.get("betting_ui", False) and not has_required_buttons and player_total is None:
+                return True
+            time.sleep(max(0.02, interval))
+        return False
 
     def _frame_to_screen(self, pt):
         ox, oy = self.last_capture_origin
