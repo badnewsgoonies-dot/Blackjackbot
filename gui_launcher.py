@@ -181,10 +181,20 @@ class App(tk.Tk):
         ttk.Button(row4, text="Run bot", command=self._run_bot).pack(side="left", padx=6)
         ttk.Button(row4, text="Run calibration", command=self._run_calibration).pack(side="left", padx=6)
         ttk.Button(row4, text="Open debugger", command=self._open_debugger).pack(side="left", padx=6)
-        ttk.Button(row4, text="Test anchors", command=self._test_anchors).pack(side="left", padx=6)
+        ttk.Button(row4, text="Live reader", command=self._open_live_reader).pack(side="left", padx=6)
 
         self.status = tk.StringVar(value="")
         ttk.Label(self, textvariable=self.status, foreground="#444").pack(fill="x", **pad)
+
+        # Log panel
+        log_frame = ttk.LabelFrame(self, text="Bot Output")
+        log_frame.pack(fill="both", expand=True, **pad)
+        self.log_text = tk.Text(log_frame, height=10, state="disabled", wrap="word")
+        self.log_text.pack(side="left", fill="both", expand=True)
+        scrollbar = ttk.Scrollbar(log_frame, command=self.log_text.yview)
+        scrollbar.pack(side="right", fill="y")
+        self.log_text.config(yscrollcommand=scrollbar.set)
+        ttk.Button(self, text="Clear Log", command=self._clear_log).pack(anchor="e", padx=10, pady=2)
 
     def _refresh_foreground(self):
         title = get_foreground_window_title()
@@ -412,7 +422,19 @@ class App(tk.Tk):
                     cmd = [sys.executable, "--bot"] + args
                 else:
                     cmd = [sys.executable, str(Path(__file__).resolve()), "--bot"] + args
-                subprocess.Popen(cmd, cwd=str(ROOT), env=env)
+                proc = subprocess.Popen(
+                    cmd, cwd=str(ROOT), env=env,
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, bufsize=1
+                )
+                # Stream output to log panel
+                def stream_output():
+                    try:
+                        for line in proc.stdout:
+                            self.after(0, lambda l=line: self._append_log(l))
+                    except Exception:
+                        pass
+                threading.Thread(target=stream_output, daemon=True).start()
 
                 if self._can_show_overlay():
                     if self.overlay:
@@ -438,6 +460,23 @@ class App(tk.Tk):
             DebugWindow(self, config_path=CONFIG_PATH)
         except Exception as exc:
             self.status.set(f"Failed to open debugger: {exc}")
+
+    def _open_live_reader(self):
+        try:
+            LiveReaderWindow(self, config_path=CONFIG_PATH)
+        except Exception as exc:
+            self.status.set(f"Failed to open live reader: {exc}")
+
+    def _append_log(self, text):
+        self.log_text.config(state="normal")
+        self.log_text.insert("end", text)
+        self.log_text.see("end")
+        self.log_text.config(state="disabled")
+
+    def _clear_log(self):
+        self.log_text.config(state="normal")
+        self.log_text.delete("1.0", "end")
+        self.log_text.config(state="disabled")
 
     def _test_anchors(self):
         try:
@@ -781,6 +820,74 @@ class HUDOverlay(tk.Toplevel):
                 self.warned_stale = True
 
         self.after(300, self._tick)
+
+
+class LiveReaderWindow(tk.Toplevel):
+    """Standalone live reader window - shows game state in real-time."""
+
+    def __init__(self, parent, *, config_path: Path):
+        super().__init__(parent)
+        self.title("Live Reader")
+        self.geometry("280x120")
+        self.attributes("-topmost", True)
+        self.config_path = config_path
+        self.detector = None
+        self._load_error = None
+
+        # Try to load detector
+        try:
+            from screen_capture import GOP3Detector
+            self.detector = GOP3Detector(load_config())
+            self._load_error = None
+        except Exception as exc:
+            self._load_error = str(exc)
+
+        self._build_ui()
+        self._tick()
+
+    def _build_ui(self):
+        pad = {"padx": 8, "pady": 4}
+
+        self.player_var = tk.StringVar(value="Player: --")
+        self.dealer_var = tk.StringVar(value="Dealer: --")
+        self.phase_var = tk.StringVar(value="Phase: --")
+
+        ttk.Label(self, textvariable=self.player_var, font=("Consolas", 14)).pack(anchor="w", **pad)
+        ttk.Label(self, textvariable=self.dealer_var, font=("Consolas", 14)).pack(anchor="w", **pad)
+        ttk.Label(self, textvariable=self.phase_var, font=("Consolas", 11)).pack(anchor="w", **pad)
+
+        if self._load_error:
+            ttk.Label(self, text=f"Error: {self._load_error}", foreground="red").pack(**pad)
+
+    def _tick(self):
+        if self.detector:
+            try:
+                import mss
+                with mss.mss() as sct:
+                    monitor = sct.monitors[1]
+                    shot = sct.grab(monitor)
+                    import numpy as np
+                    import cv2
+                    img = np.array(shot)
+                    screen = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+
+                state = self.detector.detect_game_state(screen)
+                pt = state.get("player_total")
+                dt = state.get("dealer_total")
+                soft = state.get("is_soft", False)
+                phase = state.get("phase", "unknown")
+
+                pt_str = f"{'S' if soft else 'H'}{pt}" if pt else "--"
+                dt_str = str(dt) if dt else "--"
+
+                self.player_var.set(f"Player: {pt_str}")
+                self.dealer_var.set(f"Dealer: {dt_str}")
+                self.phase_var.set(f"Phase: {phase}")
+            except Exception as exc:
+                err = str(exc)[:40]
+                self.phase_var.set(f"Error: {err}")
+
+        self.after(150, self._tick)
 
 
 def run_bot_mode(args):
