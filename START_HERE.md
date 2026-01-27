@@ -52,6 +52,7 @@ In the calibration console:
 1) For each prompt, move your mouse to the **center** of the requested UI element.
 2) Press **ENTER** to capture the coordinates.
 3) At the end, answer **y** to update the config file.
+If you change resolution, fixed button clicks will auto-scale, but rerun calibration for best accuracy.
 
 What the code does (and where):
 - `calibrate_positions.py` captures pixel coordinates via `pyautogui.position()`.

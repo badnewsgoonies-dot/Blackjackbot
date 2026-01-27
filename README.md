@@ -115,8 +115,7 @@ The bot follows standard basic strategy ("the book"):
 - Check `screen_capture.py` for the pytesseract path setting
 
 ### Wrong resolution
-- The bot is calibrated for 3440x1440
-- Edit `gop3_config.py` to adjust `BUTTON_POSITIONS` and the `*_REGION` percentages for different resolutions
+- The bot is calibrated for 3440x1440. Fixed button clicks auto-scale to your current screen size, but re-run calibration for best accuracy after resolution changes. Adjust `BUTTON_POSITIONS` / `*_REGION` if you keep a new layout.
 
 ### Platform notes
 - Focus checks use Win32 APIs; on macOS/Linux, set `GAME_WINDOW_TITLE = None` to avoid clicks being blocked by the foreground-title check.

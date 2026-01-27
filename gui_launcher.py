@@ -224,6 +224,7 @@ class DebugWindow(tk.Toplevel):
         except Exception:
             pyautogui = None  # type: ignore
         self.pyautogui = pyautogui
+        self._scale_warned = False
 
         self.player_out = tk.StringVar(value="player: (not read yet)")
         self.dealer_out = tk.StringVar(value="dealer: (not read yet)")
@@ -281,7 +282,28 @@ class DebugWindow(tk.Toplevel):
         if not self.cfg:
             return None
         positions = getattr(self.cfg, "BUTTON_POSITIONS", {}) or {}
-        return positions.get(name)
+        base = positions.get(name)
+        if base is None:
+            return None
+        # Apply same scaling used at runtime when resolution differs from calibration
+        try:
+            if self.pyautogui is None:
+                return base
+            current_w, current_h = self.pyautogui.size()
+            base_w = getattr(self.cfg, "SCREEN_WIDTH", current_w)
+            base_h = getattr(self.cfg, "SCREEN_HEIGHT", current_h)
+            if not base_w or not base_h:
+                return base
+            scale_x = current_w / float(base_w)
+            scale_y = current_h / float(base_h)
+            if abs(scale_x - 1.0) < 0.01 and abs(scale_y - 1.0) < 0.01:
+                return base
+            if not self._scale_warned:
+                self.status.set(f"Scaling buttons {base_w}x{base_h} -> {current_w}x{current_h} (sx={scale_x:.2f}, sy={scale_y:.2f})")
+                self._scale_warned = True
+            return (int(round(base[0] * scale_x)), int(round(base[1] * scale_y)))
+        except Exception:
+            return base
 
     def _move_to(self, name: str):
         if self.pyautogui is None:

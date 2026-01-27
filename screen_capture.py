@@ -80,6 +80,8 @@ class GOP3Detector:
         self.capture = ScreenCapture()
         self.tesseract_available = TESSERACT_AVAILABLE
         self.digit_templates = {}
+        self.button_scale_warned = False
+        self.window_region_warned = False
         self.template_ready = False
         if self.tesseract_available:
             try:
@@ -896,13 +898,30 @@ class GOP3Detector:
         # Use fixed button positions from config
         if hasattr(self.config, 'USE_FIXED_BUTTONS') and self.config.USE_FIXED_BUTTONS:
             positions = dict(self.config.BUTTON_POSITIONS)
+            h, w = screen.shape[:2]
+            if getattr(self.config, 'GAME_WINDOW', None) is not None and not self.window_region_warned:
+                print("[WARN] GAME_WINDOW is set; fixed button positions assume full-screen coordinates. Recalibrate or clear GAME_WINDOW to avoid misclicks.")
+                self.window_region_warned = True
+
+            base_w = getattr(self.config, "SCREEN_WIDTH", None) or w
+            base_h = getattr(self.config, "SCREEN_HEIGHT", None) or h
+            scale_x = w / float(base_w) if base_w else 1.0
+            scale_y = h / float(base_h) if base_h else 1.0
+            if abs(scale_x - 1.0) > 0.01 or abs(scale_y - 1.0) > 0.01:
+                if not self.button_scale_warned:
+                    print(f"[WARN] Scaling button positions from {base_w}x{base_h} to {w}x{h} (sx={scale_x:.2f}, sy={scale_y:.2f})")
+                    self.button_scale_warned = True
+                positions = {
+                    name: (int(round(x * scale_x)), int(round(y * scale_y)))
+                    for name, (x, y) in positions.items()
+                }
+
             if not getattr(self.config, 'ENABLE_BUTTON_COLOR_VALIDATION', False):
                 return positions
 
             # Try dynamic detection in the button region to correct offsets
             region = getattr(self.config, 'BUTTON_DETECT_REGION', None)
             if region:
-                h, w = screen.shape[:2]
                 rx1 = int(w * region['x_percent'][0])
                 rx2 = int(w * region['x_percent'][1])
                 ry1 = int(h * region['y_percent'][0])
@@ -954,8 +973,9 @@ class GOP3Detector:
                             mapping.pop('split', None)
                         return mapping
 
-            h, w = screen.shape[:2]
             radius = getattr(self.config, 'BUTTON_VALIDATE_RADIUS', 18)
+            if abs(scale_x - 1.0) > 0.01 or abs(scale_y - 1.0) > 0.01:
+                radius = max(1, int(round(radius * max(scale_x, scale_y))))
             threshold = getattr(self.config, 'BUTTON_VALIDATE_THRESHOLD', 0.25)
             lower1 = np.array(getattr(self.config, 'BUTTON_COLOR_HSV_LOWER', (0, 120, 80)))
             upper1 = np.array(getattr(self.config, 'BUTTON_COLOR_HSV_UPPER', (15, 255, 255)))

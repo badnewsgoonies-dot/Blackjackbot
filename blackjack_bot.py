@@ -278,6 +278,8 @@ class BlackjackBot:
                 self.confirmed_dealer_total = dealer_total
                 self.confirmed_totals_at = time.time()
                 state['totals_confirmed'] = True
+                # Mark whether the totals represent a change from the last action (used for gating)
+                state['totals_changed'] = (player_total, is_soft) != (self.pending_player_total, self.pending_player_soft)
                 return state
 
             time.sleep(interval)
@@ -542,12 +544,16 @@ class BlackjackBot:
         is_soft = state.get('is_soft', False)
         dealer_total = state.get('dealer_total')
         totals_confirmed = state.get('totals_confirmed', False)
+        totals_changed = state.get('totals_changed', False)
 
         if self.waiting_for_total_update:
             if phase != 'player_turn':
                 self.waiting_for_total_update = False
-            else:
+            elif totals_confirmed and totals_changed:
                 self.waiting_for_total_update = False
+            else:
+                self.log("Waiting for totals to update after last action; skipping")
+                return False
 
         if phase == 'betting':
             self.log("Betting phase - waiting for manual bet")
@@ -571,6 +577,9 @@ class BlackjackBot:
                 return False
             if not totals_confirmed:
                 self.log("Totals not confirmed yet")
+                return False
+            if self.waiting_for_total_update:
+                self.log("Still waiting for a confirmed total change after last action")
                 return False
 
             required = getattr(config, "REQUIRE_BUTTONS_FOR_ACTION", ("hit", "stand"))
