@@ -9,12 +9,17 @@ import sys
 import time
 
 # keyboard library requires root on Linux - make it optional
-try:
-    import keyboard
-    KEYBOARD_AVAILABLE = True
-except ImportError:
-    keyboard = None  # type: ignore
-    KEYBOARD_AVAILABLE = False
+KEYBOARD_AVAILABLE = False
+keyboard = None  # type: ignore
+if sys.platform == "win32":
+    try:
+        import keyboard
+        KEYBOARD_AVAILABLE = True
+    except ImportError:
+        pass
+else:
+    # On Linux, keyboard requires root - skip it entirely
+    pass
 
 from screen_capture import GOP3Detector, GameController
 from basic_strategy import HARD_STRATEGY, SOFT_STRATEGY, PAIR_STRATEGY, check_chart_integrity, get_chart_info
