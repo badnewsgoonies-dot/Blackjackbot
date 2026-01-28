@@ -135,9 +135,10 @@ SAVE_DEBUG_IMAGES = False
 DEBUG_IMAGE_PATH = "debug_captures"
 
 # Blue circle total detection (HSV + geometry)
+# Hue 85-130 = cyan/blue range (excludes green WIN circles)
 # Widened V range (80-255) to catch dimmer circles during animations
-BLUE_CIRCLE_HSV_LOWER = (45, 15, 80)
-BLUE_CIRCLE_HSV_UPPER = (140, 200, 255)
+BLUE_CIRCLE_HSV_LOWER = (85, 15, 80)
+BLUE_CIRCLE_HSV_UPPER = (130, 200, 255)
 BLUE_CIRCLE_MIN_AREA = 100
 BLUE_CIRCLE_MIN_SIZE = 20
 BLUE_CIRCLE_ASPECT_RANGE = (0.5, 2.5)  # Wider range for soft hands like "8/18"
@@ -149,7 +150,7 @@ TOTAL_MEMORY_FRAMES = 3
 
 # Button detection hysteresis: require N consistent frames to change button state
 # Prevents flickering during UI animations
-BUTTON_HYSTERESIS_ON = 2   # frames required to turn button "on"
+BUTTON_HYSTERESIS_ON = 1   # frames required to turn button "on" (immediate)
 BUTTON_HYSTERESIS_OFF = 2  # missed frames before turning button "off"
 
 OCR_SCALE = 3.0

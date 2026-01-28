@@ -502,6 +502,10 @@ class App(tk.Tk):
             self._record_btn.config(text="Record Frames")
             self.status.set("Recording stopped")
         else:
+            # Prevent starting multiple recordings
+            if self._record_thread and self._record_thread.is_alive():
+                self.status.set("Recording already in progress")
+                return
             self._recording = True
             self._record_btn.config(text="⏹ STOP Recording")
             self._record_thread = threading.Thread(target=self._record_frames_loop, daemon=True)
@@ -515,9 +519,12 @@ class App(tk.Tk):
         output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "timing_frames")
         os.makedirs(output_dir, exist_ok=True)
         
-        # Clear existing frames
+        # Clear existing frames (ignore locked files)
         for f in glob.glob(os.path.join(output_dir, "frame_*.png")):
-            os.remove(f)
+            try:
+                os.remove(f)
+            except (PermissionError, OSError):
+                pass  # Skip locked files
         
         capture = ScreenCapture()
         frame_count = 0
