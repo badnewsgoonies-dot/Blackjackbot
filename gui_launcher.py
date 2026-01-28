@@ -193,10 +193,6 @@ class App(tk.Tk):
 
     def _resize_game_window(self):
         """Resize the game window to a standard size for consistent detection."""
-        if sys.platform != "win32":
-            self.status.set("Window resize only works on Windows")
-            return
-        
         title = self.config_title.get()
         if not title:
             self.status.set("Set game window title first")
@@ -205,34 +201,63 @@ class App(tk.Tk):
         # Target size - 1600x930 is GOP3's native resolution (sharpest graphics)
         target_w, target_h = 1600, 930
         
-        user32 = ctypes.windll.user32
-        
-        # Find the window
-        hwnd = None
-        @ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
-        def enum_proc(h, lparam):
-            nonlocal hwnd
-            buf = ctypes.create_unicode_buffer(256)
-            user32.GetWindowTextW(h, buf, 255)
-            if title.lower() in buf.value.lower():
-                hwnd = h
-                return False
-            return True
-        
-        user32.EnumWindows(enum_proc, 0)
-        
-        if not hwnd:
-            self.status.set(f"Window not found: {title[:30]}...")
-            return
-        
-        # Get current position
-        rect = wintypes.RECT()
-        user32.GetWindowRect(hwnd, ctypes.byref(rect))
-        x, y = rect.left, rect.top
-        
-        # Resize and move to top-left area
-        user32.MoveWindow(hwnd, 0, 0, target_w, target_h, True)
-        self.status.set(f"Resized to {target_w}x{target_h} (native GOP3)")
+        if sys.platform == "win32":
+            # Windows implementation
+            user32 = ctypes.windll.user32
+            
+            hwnd = None
+            @ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+            def enum_proc(h, lparam):
+                nonlocal hwnd
+                buf = ctypes.create_unicode_buffer(256)
+                user32.GetWindowTextW(h, buf, 255)
+                if title.lower() in buf.value.lower():
+                    hwnd = h
+                    return False
+                return True
+            
+            user32.EnumWindows(enum_proc, 0)
+            
+            if not hwnd:
+                self.status.set(f"Window not found: {title[:30]}...")
+                return
+            
+            user32.MoveWindow(hwnd, 0, 0, target_w, target_h, True)
+            self.status.set(f"Resized to {target_w}x{target_h} (native GOP3)")
+        else:
+            # Linux implementation using wmctrl
+            import subprocess
+            import shutil
+            
+            if not shutil.which("wmctrl"):
+                self.status.set("Install wmctrl: sudo apt install wmctrl")
+                return
+            
+            # Find window ID
+            try:
+                result = subprocess.run(
+                    ["wmctrl", "-l"], capture_output=True, text=True, timeout=5
+                )
+                window_id = None
+                for line in result.stdout.splitlines():
+                    if title.lower() in line.lower():
+                        window_id = line.split()[0]
+                        break
+                
+                if not window_id:
+                    self.status.set(f"Window not found: {title[:30]}...")
+                    return
+                
+                # Move and resize: wmctrl -i -r <id> -e 0,x,y,w,h
+                subprocess.run(
+                    ["wmctrl", "-i", "-r", window_id, "-e", f"0,0,0,{target_w},{target_h}"],
+                    timeout=5
+                )
+                self.status.set(f"Resized to {target_w}x{target_h} (native GOP3)")
+            except subprocess.TimeoutExpired:
+                self.status.set("wmctrl timed out")
+            except Exception as e:
+                self.status.set(f"Resize failed: {e}")
 
     def _show_tools_menu(self):
         menu = tk.Menu(self, tearoff=0)
