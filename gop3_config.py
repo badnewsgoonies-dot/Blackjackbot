@@ -135,12 +135,16 @@ SAVE_DEBUG_IMAGES = False
 DEBUG_IMAGE_PATH = "debug_captures"
 
 # Blue circle total detection (HSV + geometry)
-# Tuned for both blue and green table backgrounds (circle is brighter, less saturated)
-BLUE_CIRCLE_HSV_LOWER = (45, 20, 170)
-BLUE_CIRCLE_HSV_UPPER = (130, 160, 255)
+# Widened V range (80-255) to catch dimmer circles during animations
+BLUE_CIRCLE_HSV_LOWER = (45, 15, 80)
+BLUE_CIRCLE_HSV_UPPER = (140, 200, 255)
 BLUE_CIRCLE_MIN_AREA = 100
 BLUE_CIRCLE_MIN_SIZE = 20
 BLUE_CIRCLE_ASPECT_RANGE = (0.5, 2.5)  # Wider range for soft hands like "8/18"
+
+# Total detection memory: keep last known total for N frames before declaring None
+# Helps bridge brief animation gaps where circle is temporarily invisible
+TOTAL_MEMORY_FRAMES = 3
 OCR_SCALE = 3.0
 OCR_PSMS = (11, 6, 8, 10, 13)
 OCR_FAST_MODE = False

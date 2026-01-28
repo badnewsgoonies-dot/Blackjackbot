@@ -90,6 +90,14 @@ class GOP3Detector:
         )
         self._auto_cal_state = None
         self.window_rect = None
+        
+        # Total memory: bridge brief animation gaps
+        self._last_player_total = None
+        self._last_player_soft = False
+        self._last_dealer_total = None
+        self._total_memory_counter = 0
+        self._total_memory_frames = getattr(config, "TOTAL_MEMORY_FRAMES", 3)
+        
         if self.tesseract_available:
             try:
                 pytesseract.get_tesseract_version()
@@ -98,6 +106,13 @@ class GOP3Detector:
                 print("Warning: Tesseract not available. Card totals cannot be read.")
         if getattr(self.config, 'TOTAL_READ_MODE', 'ocr') == 'template':
             self._load_digit_templates()
+
+    def reset_total_memory(self):
+        """Reset total memory (call when new hand starts or phase transitions to betting)."""
+        self._last_player_total = None
+        self._last_player_soft = False
+        self._last_dealer_total = None
+        self._total_memory_counter = 0
 
     def capture_game(self):
         """Capture the game screen."""
@@ -706,7 +721,7 @@ class GOP3Detector:
         self._ensure_calibrated(screen)
         rect = self._region_rect(screen, self.config.PLAYER_TOTAL_REGION)
         if not rect:
-            return (None, False)
+            return self._player_total_with_memory(None, False)
         x1, y1, x2, y2 = rect
 
         roi = screen[y1:y2, x1:x2]
@@ -720,9 +735,9 @@ class GOP3Detector:
         if getattr(self.config, 'TOTAL_READ_MODE', 'ocr') == 'template':
             total, is_soft = self._detect_blue_circle_total_template(roi)
             if total is not None:
-                return (total, is_soft)
+                return self._player_total_with_memory(total, is_soft)
             if not getattr(self.config, 'TEMPLATE_FALLBACK_TO_OCR', True):
-                return (None, False)
+                return self._player_total_with_memory(None, False)
             circle_roi = self._find_blue_circle_roi(roi)
             if circle_roi is not None:
                 self._diag_save(diag, image_name="player_total_circle_roi.png", image=circle_roi)
@@ -730,8 +745,38 @@ class GOP3Detector:
                 self._learn_templates_from_circle(circle_roi, text)
                 total, is_soft = self._parse_total_text(text)
                 if total is not None:
-                    return (total, is_soft)
-        return self._detect_blue_circle_total(roi, diag=diag, tag="player_total")
+                    return self._player_total_with_memory(total, is_soft)
+        result = self._detect_blue_circle_total(roi, diag=diag, tag="player_total")
+        return self._player_total_with_memory(result[0], result[1])
+
+    def _player_total_with_memory(self, total: Optional[int], is_soft: bool) -> tuple:
+        """Apply memory fallback for None detection and reject impossible jumps."""
+        MAX_JUMP = 11  # Max possible single-card increase (Ace)
+        
+        if total is not None:
+            # Check for impossible jump (rejects OCR misreads during occlusion)
+            if self._last_player_total is not None:
+                jump = abs(total - self._last_player_total)
+                if jump > MAX_JUMP and self._total_memory_counter < self._total_memory_frames:
+                    # Impossible jump - likely OCR misread, use memory
+                    self._total_memory_counter += 1
+                    return (self._last_player_total, self._last_player_soft)
+            
+            # Valid detection: update memory, reset counter
+            self._last_player_total = total
+            self._last_player_soft = is_soft
+            self._total_memory_counter = 0
+            return (total, is_soft)
+        else:
+            # Failed detection: use memory if within limit
+            if self._last_player_total is not None and self._total_memory_counter < self._total_memory_frames:
+                self._total_memory_counter += 1
+                return (self._last_player_total, self._last_player_soft)
+            else:
+                # Memory expired or never set
+                self._last_player_total = None
+                self._last_player_soft = False
+                return (None, False)
 
     def detect_dealer_total(self, screen, diag: Optional["DiagnosticIteration"] = None) -> int:
         """
