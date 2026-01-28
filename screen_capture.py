@@ -133,7 +133,9 @@ class GOP3Detector:
             return self.capture.capture_screen(self.config.GAME_WINDOW)
         screen = self.capture.capture_screen()
         self._ensure_calibrated(screen)
-        if self.window_rect:
+        # Don't crop when auto_cal is active - transform offsets handle positioning
+        # Cropping conflicts with auto_cal's coordinate transformations
+        if self.window_rect and not self.auto_cal.transform:
             x1, y1, x2, y2 = self.window_rect
             return screen[y1:y2, x1:x2]
         return screen
