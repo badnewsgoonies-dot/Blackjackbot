@@ -166,6 +166,7 @@ class App(tk.Tk):
         ttk.Label(row1, text="Game Window:").pack(side="left")
         ttk.Entry(row1, textvariable=self.config_title, width=38).pack(side="left", padx=6)
         ttk.Button(row1, text="Auto-detect", command=self._set_from_foreground).pack(side="left")
+        ttk.Button(row1, text="Resize", command=self._resize_game_window).pack(side="left", padx=4)
 
         # Main buttons row
         row2 = ttk.Frame(self)
@@ -189,6 +190,49 @@ class App(tk.Tk):
         scrollbar.pack(side="right", fill="y")
         self.log_text.config(yscrollcommand=scrollbar.set)
         ttk.Button(self, text="Clear", command=self._clear_log).pack(anchor="e", padx=10, pady=2)
+
+    def _resize_game_window(self):
+        """Resize the game window to a standard size for consistent detection."""
+        if sys.platform != "win32":
+            self.status.set("Window resize only works on Windows")
+            return
+        
+        title = self.config_title.get()
+        if not title:
+            self.status.set("Set game window title first")
+            return
+        
+        # Target size - 1600x930 is GOP3's native resolution (sharpest graphics)
+        target_w, target_h = 1600, 930
+        
+        user32 = ctypes.windll.user32
+        
+        # Find the window
+        hwnd = None
+        @ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+        def enum_proc(h, lparam):
+            nonlocal hwnd
+            buf = ctypes.create_unicode_buffer(256)
+            user32.GetWindowTextW(h, buf, 255)
+            if title.lower() in buf.value.lower():
+                hwnd = h
+                return False
+            return True
+        
+        user32.EnumWindows(enum_proc, 0)
+        
+        if not hwnd:
+            self.status.set(f"Window not found: {title[:30]}...")
+            return
+        
+        # Get current position
+        rect = wintypes.RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(rect))
+        x, y = rect.left, rect.top
+        
+        # Resize and move to top-left area
+        user32.MoveWindow(hwnd, 0, 0, target_w, target_h, True)
+        self.status.set(f"Resized to {target_w}x{target_h} (native GOP3)")
 
     def _show_tools_menu(self):
         menu = tk.Menu(self, tearoff=0)
