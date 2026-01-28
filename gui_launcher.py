@@ -2,6 +2,7 @@
 
 import ctypes
 from ctypes import wintypes
+import glob
 import json
 import os
 import re
@@ -183,6 +184,11 @@ class App(tk.Tk):
         ttk.Button(row4, text="Open debugger", command=self._open_debugger).pack(side="left", padx=6)
         ttk.Button(row4, text="Live reader", command=self._open_live_reader).pack(side="left", padx=6)
         ttk.Button(row4, text="Diagnostic", command=self._open_diagnostic_reader).pack(side="left", padx=6)
+        ttk.Button(row4, text="Extract Frames", command=self._extract_frames).pack(side="left", padx=6)
+        self._record_btn = ttk.Button(row4, text="Record Frames", command=self._toggle_recording)
+        self._record_btn.pack(side="left", padx=6)
+        self._recording = False
+        self._record_thread = None
 
         self.status = tk.StringVar(value="")
         ttk.Label(self, textvariable=self.status, foreground="#444").pack(fill="x", **pad)
@@ -442,6 +448,97 @@ class App(tk.Tk):
             DiagnosticReaderWindow(self, config_path=CONFIG_PATH)
         except Exception as exc:
             self.status.set(f"Failed to open diagnostic reader: {exc}")
+
+    def _extract_frames(self):
+        """Extract frames from a video file to timing_frames/."""
+        from tkinter import filedialog, messagebox
+        video_path = filedialog.askopenfilename(
+            title="Select video file",
+            filetypes=[("Video files", "*.mp4 *.avi *.mkv *.mov *.webm"), ("All files", "*.*")]
+        )
+        if not video_path:
+            return
+        
+        output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "timing_frames")
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Clear existing frames
+        for f in glob.glob(os.path.join(output_dir, "frame_*.png")):
+            os.remove(f)
+        
+        self.status.set("Extracting frames...")
+        self.update()
+        
+        try:
+            import cv2
+            cap = cv2.VideoCapture(video_path)
+            fps = cap.get(cv2.CAP_PROP_FPS) or 30
+            frame_interval = max(1, int(fps / 5))  # Extract at ~5 fps
+            
+            frame_count = 0
+            saved_count = 0
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                if frame_count % frame_interval == 0:
+                    timestamp = frame_count / fps
+                    out_path = os.path.join(output_dir, f"frame_{saved_count:05d}_{timestamp:.2f}s.png")
+                    cv2.imwrite(out_path, frame)
+                    saved_count += 1
+                frame_count += 1
+            cap.release()
+            
+            self.status.set(f"Extracted {saved_count} frames to timing_frames/")
+            messagebox.showinfo("Done", f"Extracted {saved_count} frames at ~5 fps\nRun 'python test_stability_headless.py' to analyze")
+        except Exception as e:
+            self.status.set(f"Error: {e}")
+            messagebox.showerror("Error", str(e))
+
+    def _toggle_recording(self):
+        """Toggle continuous frame recording from screen."""
+        if self._recording:
+            self._recording = False
+            self._record_btn.config(text="Record Frames")
+            self.status.set("Recording stopped")
+        else:
+            self._recording = True
+            self._record_btn.config(text="⏹ STOP Recording")
+            self._record_thread = threading.Thread(target=self._record_frames_loop, daemon=True)
+            self._record_thread.start()
+
+    def _record_frames_loop(self):
+        """Background thread that captures frames at ~5 fps."""
+        import cv2
+        from screen_capture import ScreenCapture
+        
+        output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "timing_frames")
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Clear existing frames
+        for f in glob.glob(os.path.join(output_dir, "frame_*.png")):
+            os.remove(f)
+        
+        capture = ScreenCapture()
+        frame_count = 0
+        start_time = time.time()
+        interval = 0.2  # 5 fps
+        
+        self.after(0, lambda: self.status.set("Recording... click STOP when done"))
+        
+        while self._recording:
+            try:
+                screen = capture.capture_screen()
+                if screen is not None:
+                    timestamp = time.time() - start_time
+                    out_path = os.path.join(output_dir, f"frame_{frame_count:05d}_{timestamp:.2f}s.png")
+                    cv2.imwrite(out_path, screen)
+                    frame_count += 1
+                time.sleep(interval)
+            except Exception:
+                break
+        
+        self.after(0, lambda: self.status.set(f"Saved {frame_count} frames to timing_frames/"))
 
     def _append_log(self, text):
         self.log_text.config(state="normal")

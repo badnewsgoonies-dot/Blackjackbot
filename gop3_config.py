@@ -10,17 +10,17 @@ GAME_WINDOW = None
 GAME_WINDOW_TITLE = "Play Governor of Poker 3 | The Official Governor of Poker site - Google Chrome"
 
 # Screen resolution (for reference)
-SCREEN_WIDTH = 3200
-SCREEN_HEIGHT = 1800
+SCREEN_WIDTH = 2560
+SCREEN_HEIGHT = 1440
 
 # Fixed button positions (pixel coordinates)
 # These are the exact center positions of each button
 # Adjusted +80 pixels right and -80 pixels up (diagonally up-right)
 BUTTON_POSITIONS = {
-    'hit_bet': (1309, 1524),
-    'stand': (1603, 1533),
-    'double': (1840, 1523),
-    'split': (2134, 1531),
+    'hit_bet': (995, 1282),
+    'stand': (1276, 1286),
+    'double': (1534, 1285),
+    'split': (1826, 1283),
 }
 
 # Use fixed positions instead of detection
@@ -60,27 +60,27 @@ BUTTON_MIN_HEIGHT = 30
 # Player total region (where the number like "12" or "10/20" appears)
 # Based on analysis: bottom center area
 PLAYER_TOTAL_REGION = {
-    'x_percent': (0.40, 0.59),
-    'y_percent': (0.62, 0.76),
+    'x_percent': (0.40, 0.60),
+    'y_percent': (0.63, 0.77),
 }
 
 # Dealer card region (where dealer's up card appears)
 # Based on analysis: top center area
 DEALER_CARD_REGION = {
-    'x_percent': (0.42, 0.58),
-    'y_percent': (0.29, 0.53),
+    'x_percent': (0.41, 0.57),
+    'y_percent': (0.24, 0.48),
 }
 
 # Dealer total region (blue circle indicator with one card face down)
 # Defaults to the same area as the dealer card region.
 DEALER_TOTAL_REGION = {
-    'x_percent': (0.42, 0.58),
-    'y_percent': (0.29, 0.53),
+    'x_percent': (0.41, 0.57),
+    'y_percent': (0.24, 0.48),
 }
 
 # Player card region (used for sanity-check OCR of card ranks)
 PLAYER_CARD_REGION = {
-    'x_percent': (0.42, 0.56),
+    'x_percent': (0.43, 0.57),
     'y_percent': (0.63, 0.76),
 }
 
@@ -141,10 +141,17 @@ BLUE_CIRCLE_HSV_UPPER = (140, 200, 255)
 BLUE_CIRCLE_MIN_AREA = 100
 BLUE_CIRCLE_MIN_SIZE = 20
 BLUE_CIRCLE_ASPECT_RANGE = (0.5, 2.5)  # Wider range for soft hands like "8/18"
+BLUE_CIRCLE_MIN_CIRCULARITY = 0.35  # Reject rectangles (card borders have ~0.02)
 
 # Total detection memory: keep last known total for N frames before declaring None
 # Helps bridge brief animation gaps where circle is temporarily invisible
 TOTAL_MEMORY_FRAMES = 3
+
+# Button detection hysteresis: require N consistent frames to change button state
+# Prevents flickering during UI animations
+BUTTON_HYSTERESIS_ON = 2   # frames required to turn button "on"
+BUTTON_HYSTERESIS_OFF = 2  # missed frames before turning button "off"
+
 OCR_SCALE = 3.0
 OCR_PSMS = (11, 6, 8, 10, 13)
 OCR_FAST_MODE = False

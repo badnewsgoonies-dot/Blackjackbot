@@ -98,6 +98,13 @@ class GOP3Detector:
         self._total_memory_counter = 0
         self._total_memory_frames = getattr(config, "TOTAL_MEMORY_FRAMES", 3)
         
+        # Button hysteresis: prevent flickering
+        self._button_on_counters = {}   # frames button has been detected
+        self._button_off_counters = {}  # frames button has been missing
+        self._button_states = {}        # current stable button states
+        self._button_hysteresis_on = getattr(config, "BUTTON_HYSTERESIS_ON", 2)
+        self._button_hysteresis_off = getattr(config, "BUTTON_HYSTERESIS_OFF", 2)
+        
         if self.tesseract_available:
             try:
                 pytesseract.get_tesseract_version()
@@ -113,6 +120,12 @@ class GOP3Detector:
         self._last_player_soft = False
         self._last_dealer_total = None
         self._total_memory_counter = 0
+
+    def reset_button_hysteresis(self):
+        """Reset button hysteresis (call on phase transitions)."""
+        self._button_on_counters = {}
+        self._button_off_counters = {}
+        self._button_states = {}
 
     def capture_game(self):
         """Capture the game screen."""
@@ -442,6 +455,7 @@ class GOP3Detector:
 
         min_area = getattr(self.config, 'BLUE_CIRCLE_MIN_AREA', 150)
         min_size = getattr(self.config, 'BLUE_CIRCLE_MIN_SIZE', 30)
+        min_circularity = getattr(self.config, 'BLUE_CIRCLE_MIN_CIRCULARITY', 0.35)
         aspect_min, aspect_max = getattr(self.config, 'BLUE_CIRCLE_ASPECT_RANGE', (0.7, 1.4))
 
         roi_h, roi_w = roi.shape[:2]
@@ -465,6 +479,9 @@ class GOP3Detector:
             circularity = 0.0
             if perimeter > 0:
                 circularity = 4 * np.pi * area / (perimeter * perimeter)
+            # Reject rectangular shapes (card borders, UI elements)
+            if circularity < min_circularity:
+                continue
             score = circularity * area
             if best is None or score > best[0]:
                 best = (score, x, y, cw, ch)
@@ -751,14 +768,17 @@ class GOP3Detector:
 
     def _player_total_with_memory(self, total: Optional[int], is_soft: bool) -> tuple:
         """Apply memory fallback for None detection and reject impossible jumps."""
-        MAX_JUMP = 11  # Max possible single-card increase (Ace)
+        MAX_INCREASE = 11  # Max possible single-card increase (Ace)
         
         if total is not None:
-            # Check for impossible jump (rejects OCR misreads during occlusion)
+            # Check for impossible changes (rejects OCR misreads during occlusion)
             if self._last_player_total is not None:
-                jump = abs(total - self._last_player_total)
-                if jump > MAX_JUMP and self._total_memory_counter < self._total_memory_frames:
-                    # Impossible jump - likely OCR misread, use memory
+                change = total - self._last_player_total
+                # Totals can only increase (new card) or stay same
+                # Decrease = OCR misread; Increase > 11 = OCR misread
+                is_impossible = change < 0 or change > MAX_INCREASE
+                if is_impossible and self._total_memory_counter < self._total_memory_frames:
+                    # Impossible change - likely OCR misread, use memory
                     self._total_memory_counter += 1
                     return (self._last_player_total, self._last_player_soft)
             
@@ -1116,10 +1136,32 @@ class GOP3Detector:
                 json_name="buttons_fixed_validation.json",
                 json_obj={"threshold": float(threshold), "ratios": ratios, "visible": sorted(list(visible.keys()))},
             )
-            return visible
+            return self._apply_button_hysteresis(visible, positions)
 
         # Fallback to empty dict if no fixed positions
         return {}
+
+    def _apply_button_hysteresis(self, detected: dict, all_positions: dict) -> dict:
+        """Apply hysteresis to button detection to prevent flickering."""
+        all_buttons = ['hit_bet', 'stand', 'double', 'split']
+        
+        for btn in all_buttons:
+            if btn in detected:
+                # Button detected this frame
+                self._button_on_counters[btn] = self._button_on_counters.get(btn, 0) + 1
+                self._button_off_counters[btn] = 0
+                # Turn on after N consecutive detections
+                if self._button_on_counters[btn] >= self._button_hysteresis_on:
+                    self._button_states[btn] = detected[btn]
+            else:
+                # Button not detected this frame
+                self._button_off_counters[btn] = self._button_off_counters.get(btn, 0) + 1
+                self._button_on_counters[btn] = 0
+                # Turn off after N consecutive misses
+                if self._button_off_counters[btn] >= self._button_hysteresis_off:
+                    self._button_states.pop(btn, None)
+        
+        return dict(self._button_states)
 
     def detect_game_state(self, screen, diag: Optional["DiagnosticIteration"] = None) -> dict:
         """
@@ -1154,7 +1196,9 @@ class GOP3Detector:
         state['is_soft'] = is_soft
         state['dealer_total'] = dealer_total
 
-        # If we can read a player total, we're in player turn
+        # Determine phase and detect buttons
+        prev_phase = getattr(self, '_last_phase', 'unknown')
+        
         if total is not None:
             state['phase'] = 'player_turn'
             state['buttons'] = self.detect_buttons(screen, diag=diag)
@@ -1165,7 +1209,12 @@ class GOP3Detector:
                 state['dealer_card'] = self.detect_dealer_card(screen)
         else:
             state['phase'] = 'betting'
+            # Reset memory when entering betting phase (new hand)
+            if prev_phase != 'betting':
+                self.reset_total_memory()
+                self.reset_button_hysteresis()
 
+        self._last_phase = state['phase']
         self._diag_save(diag, json_name="detected_state.json", json_obj=state)
         return state
 
