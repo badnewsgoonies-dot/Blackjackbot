@@ -1054,6 +1054,11 @@ class GOP3Detector:
                     ry1 = int(h * region['y_percent'][0])
                     ry2 = int(h * region['y_percent'][1])
 
+                # Debug: print button region once
+                if not getattr(self, '_button_region_logged', False):
+                    print(f"[DEBUG] Button region: ({rx1},{ry1})-({rx2},{ry2}) screen={w}x{h}")
+                    self._button_region_logged = True
+
                 roi = screen[ry1:ry2, rx1:rx2]
                 if roi.size != 0:
                     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
@@ -1080,6 +1085,11 @@ class GOP3Detector:
                         cx = rx1 + x + bw // 2
                         cy = ry1 + y + bh // 2
                         buttons.append((cx, cy))
+
+                    # Debug: log dynamic detection result
+                    if not getattr(self, '_button_detect_logged', False) and len(buttons) > 0:
+                        print(f"[DEBUG] Dynamic button detection found {len(buttons)} buttons")
+                        self._button_detect_logged = True
 
                     buttons.sort(key=lambda b: b[0])
                     if len(buttons) >= 2:
@@ -1109,6 +1119,12 @@ class GOP3Detector:
             lower2 = np.array(getattr(self.config, 'BUTTON_COLOR_HSV_LOWER2', (170, 120, 80)))
             upper2 = np.array(getattr(self.config, 'BUTTON_COLOR_HSV_UPPER2', (180, 255, 255)))
 
+            # Debug: print positions being validated once
+            if not getattr(self, '_button_pos_logged', False):
+                print(f"[DEBUG] Button positions for validation: {positions}")
+                print(f"[DEBUG] radius={radius}, screen={w}x{h}")
+                self._button_pos_logged = True
+
             visible = {}
             ratios: Dict[str, float] = {}
             for name, (x, y) in positions.items():
@@ -1128,9 +1144,13 @@ class GOP3Detector:
                 mask = cv2.bitwise_or(mask1, mask2)
                 ratio = float(cv2.countNonZero(mask)) / float(mask.size)
                 ratios[name] = ratio
+                print(f"[DEBUG] {name}: ratio={ratio:.3f} threshold={threshold}")
                 if ratio >= threshold:
                     visible[name] = (x, y)
 
+            # Store for debug output
+            self._last_button_ratios = ratios
+            
             self._diag_save(
                 diag,
                 json_name="buttons_fixed_validation.json",
@@ -1161,7 +1181,11 @@ class GOP3Detector:
                 if self._button_off_counters[btn] >= self._button_hysteresis_off:
                     self._button_states.pop(btn, None)
         
-        return dict(self._button_states)
+        result = dict(self._button_states)
+        # Debug: log when returning empty after having detected buttons
+        if not result and detected:
+            print(f"[DEBUG] Hysteresis blocked buttons: detected={list(detected.keys())}, on_counts={dict(self._button_on_counters)}")
+        return result
 
     def detect_game_state(self, screen, diag: Optional["DiagnosticIteration"] = None) -> dict:
         """

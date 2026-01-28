@@ -50,8 +50,8 @@ BUTTON_COLOR_HSV_UPPER2 = (180, 255, 255)
 
 # Dynamic button detection (fallback if fixed positions drift)
 BUTTON_DETECT_REGION = {
-    'x_percent': (0.30, 0.70),
-    'y_percent': (0.80, 0.96),
+    'x_percent': (0.25, 0.75),
+    'y_percent': (0.78, 1.05),  # Extended to catch buttons with window offset variance
 }
 BUTTON_MIN_AREA = 2500
 BUTTON_MIN_WIDTH = 80

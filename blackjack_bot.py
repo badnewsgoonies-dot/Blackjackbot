@@ -178,6 +178,9 @@ class BlackjackBot:
         if total is not None:
             state['phase'] = 'player_turn'
             state['buttons'] = self.detector.detect_buttons(screen, diag=diag)
+            # Debug: print button validation ratios
+            if hasattr(self.detector, '_last_button_ratios'):
+                print(f"[DEBUG] button_ratios={self.detector._last_button_ratios}")
             state['can_split'] = 'split' in state['buttons']
             state['can_double'] = 'double' in state['buttons']
         else:
@@ -648,6 +651,7 @@ class BlackjackBot:
                 return False
 
             if missing:
+                print(f"[DEBUG] Required buttons missing {missing}; refusing to act")
                 self.log(f"Required buttons missing {missing}; refusing to act")
                 return False
             if player_total == 21 and self.actions_in_round == 0:
