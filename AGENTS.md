@@ -6,9 +6,11 @@
 - `gop3_config.py` – runtime config (timing, regions, OCR settings, focus check).
 - `gui_launcher.py` – Windows GUI for setting `GAME_WINDOW_TITLE` and running the bot.
 - `config_loader.py` – loads config from external file (supports EXE builds).
-- `calibrate*.py`, `get_position.py` – calibration and helper tools.
-- `test_detection.py` – detection sanity checks.
-- `Calibration Images/` and `debug_*.png` – assets and debug outputs.
+- `calibrate_positions.py` – click-to-calibrate tool for button/region positions.
+- `auto_calibration.py` – anchor-based auto-calibration for resolution/layout drift.
+- `test_detection.py`, `test_stability_headless.py` – detection sanity checks.
+- `diagnostics.py` – diagnostic utilities and flight recorder support.
+- `debug_*.png` – debug output images.
 
 ## Build, Test, and Development Commands
 - `python blackjack_bot.py --test`  
