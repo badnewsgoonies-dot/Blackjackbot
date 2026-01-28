@@ -112,6 +112,7 @@ class BlackjackBot:
         self.actions_in_round = 0
         self._last_chart_check = 0.0
         self.visual_ok = False
+        self._waiting_for_deal = False
 
     def reset_round_cache(self):
         """Reset cached totals when a round ends."""

@@ -41,16 +41,29 @@ def get_bundled_config_path() -> Path:
 
 
 def get_foreground_window_title() -> str:
-    user32 = ctypes.windll.user32
-    hwnd = user32.GetForegroundWindow()
-    if not hwnd:
+    if sys.platform == "win32":
+        user32 = ctypes.windll.user32
+        hwnd = user32.GetForegroundWindow()
+        if not hwnd:
+            return ""
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length == 0:
+            return ""
+        buf = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buf, length + 1)
+        return buf.value
+    else:
+        # Linux: use xdotool to get the active window title
+        try:
+            result = subprocess.run(
+                ["xdotool", "getactivewindow", "getwindowname"],
+                capture_output=True, text=True, timeout=2
+            )
+            if result.returncode == 0:
+                return result.stdout.strip()
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
         return ""
-    length = user32.GetWindowTextLengthW(hwnd)
-    if length == 0:
-        return ""
-    buf = ctypes.create_unicode_buffer(length + 1)
-    user32.GetWindowTextW(hwnd, buf, length + 1)
-    return buf.value
 
 
 def load_config_from_path(path: Path):
@@ -206,8 +219,8 @@ class App(tk.Tk):
             self.status.set("Set game window title first")
             return
         
-        # Target size - 1600x930 is GOP3's native resolution (sharpest graphics)
-        target_w, target_h = 1600, 930
+        # Target size - 1600x930 is GOP3's native resolution + ~100px for browser chrome
+        target_w, target_h = 1600, 1030
         
         if sys.platform == "win32":
             # Windows implementation
@@ -231,7 +244,7 @@ class App(tk.Tk):
                 return
             
             user32.MoveWindow(hwnd, 0, 0, target_w, target_h, True)
-            self.status.set(f"Resized to {target_w}x{target_h} (native GOP3)")
+            self.status.set(f"Resized to {target_w}x{target_h}")
         else:
             # Linux implementation using wmctrl
             import subprocess
@@ -261,7 +274,7 @@ class App(tk.Tk):
                     ["wmctrl", "-i", "-r", window_id, "-e", f"0,0,0,{target_w},{target_h}"],
                     timeout=5
                 )
-                self.status.set(f"Resized to {target_w}x{target_h} (native GOP3)")
+                self.status.set(f"Resized to {target_w}x{target_h}")
             except subprocess.TimeoutExpired:
                 self.status.set("wmctrl timed out")
             except Exception as e:
@@ -311,36 +324,49 @@ class App(tk.Tk):
             self.status.set("Failed to write config.")
 
     def _focus_game_window(self) -> bool:
-        if sys.platform != "win32":
-            return False
         title = self.config_title.get()
         if not title:
             return False
 
-        user32 = ctypes.windll.user32
+        if sys.platform == "win32":
+            user32 = ctypes.windll.user32
 
-        matches = []
+            matches = []
 
-        @ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
-        def enum_proc(hwnd, lparam):
-            buf = ctypes.create_unicode_buffer(256)
-            length = user32.GetWindowTextW(hwnd, buf, 255)
-            if length == 0:
+            @ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+            def enum_proc(hwnd, lparam):
+                buf = ctypes.create_unicode_buffer(256)
+                length = user32.GetWindowTextW(hwnd, buf, 255)
+                if length == 0:
+                    return True
+                window_title = buf.value
+                if title.lower() in window_title.lower():
+                    matches.append(hwnd)
+                    return False
                 return True
-            window_title = buf.value
-            if title.lower() in window_title.lower():
-                matches.append(hwnd)
+
+            user32.EnumWindows(enum_proc, 0)
+            if not matches:
                 return False
+
+            hwnd = matches[0]
+            # Just bring to foreground without changing window state
+            user32.SetForegroundWindow(hwnd)
             return True
-
-        user32.EnumWindows(enum_proc, 0)
-        if not matches:
+        else:
+            # Linux: use xdotool to find and focus the window
+            try:
+                result = subprocess.run(
+                    ["xdotool", "search", "--name", title],
+                    capture_output=True, text=True, timeout=2
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    window_id = result.stdout.strip().split('\n')[0]
+                    subprocess.run(["xdotool", "windowactivate", window_id], timeout=2)
+                    return True
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                pass
             return False
-
-        hwnd = matches[0]
-        # Just bring to foreground without changing window state
-        user32.SetForegroundWindow(hwnd)
-        return True
 
     def _scale_point(self, point):
         try:
@@ -465,10 +491,32 @@ class App(tk.Tk):
             }
             if sys.platform == "win32":
                 popen_kwargs["creationflags"] = subprocess.CREATE_NEW_CONSOLE
-            subprocess.Popen(
-                [python_exe, str(script.name)],
-                **popen_kwargs,
-            )
+                subprocess.Popen(
+                    [python_exe, str(script.name)],
+                    **popen_kwargs,
+                )
+            else:
+                # On Linux/macOS, launch in a terminal emulator
+                terminals = [
+                    ["mate-terminal", "-e", f"{python_exe} {script}"],
+                    ["kitty", python_exe, str(script)],
+                    ["wezterm", "start", "--", python_exe, str(script)],
+                    ["gnome-terminal", "--", python_exe, str(script)],
+                    ["xfce4-terminal", "-e", f"{python_exe} {script}"],
+                    ["konsole", "-e", python_exe, str(script)],
+                    ["xterm", "-e", python_exe, str(script)],
+                ]
+                launched = False
+                for term_cmd in terminals:
+                    try:
+                        subprocess.Popen(term_cmd, cwd=str(script.parent), env=env)
+                        launched = True
+                        break
+                    except FileNotFoundError:
+                        continue
+                if not launched:
+                    self.status.set("No terminal emulator found. Run calibrate_positions.py manually.")
+                    return
             self.status.set("Launched calibration in new console window.")
         except Exception as exc:
             self.status.set(f"Failed to launch calibration: {exc}")

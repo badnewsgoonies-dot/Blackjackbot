@@ -10,17 +10,17 @@ GAME_WINDOW = None
 GAME_WINDOW_TITLE = "Play Governor of Poker 3 | The Official Governor of Poker site - Google Chrome"
 
 # Screen resolution (for reference)
-SCREEN_WIDTH = 2560
-SCREEN_HEIGHT = 1440
+SCREEN_WIDTH = 1920
+SCREEN_HEIGHT = 1080
 
 # Fixed button positions (pixel coordinates)
 # These are the exact center positions of each button
 # Adjusted +80 pixels right and -80 pixels up (diagonally up-right)
 BUTTON_POSITIONS = {
-    'hit_bet': (995, 1282),
-    'stand': (1276, 1286),
-    'double': (1534, 1285),
-    'split': (1826, 1283),
+    'hit_bet': (634, 923),
+    'stand': (828, 920),
+    'double': (964, 926),
+    'split': (1151, 925),
 }
 
 # Use fixed positions instead of detection
@@ -60,27 +60,27 @@ BUTTON_MIN_HEIGHT = 30
 # Player total region (where the number like "12" or "10/20" appears)
 # Based on analysis: bottom center area
 PLAYER_TOTAL_REGION = {
-    'x_percent': (0.40, 0.60),
+    'x_percent': (0.32, 0.52),
     'y_percent': (0.63, 0.77),
 }
 
 # Dealer card region (where dealer's up card appears)
 # Based on analysis: top center area
 DEALER_CARD_REGION = {
-    'x_percent': (0.41, 0.57),
-    'y_percent': (0.24, 0.48),
+    'x_percent': (0.34, 0.50),
+    'y_percent': (0.29, 0.53),
 }
 
 # Dealer total region (blue circle indicator with one card face down)
 # Defaults to the same area as the dealer card region.
 DEALER_TOTAL_REGION = {
-    'x_percent': (0.41, 0.57),
-    'y_percent': (0.24, 0.48),
+    'x_percent': (0.34, 0.50),
+    'y_percent': (0.29, 0.53),
 }
 
 # Player card region (used for sanity-check OCR of card ranks)
 PLAYER_CARD_REGION = {
-    'x_percent': (0.43, 0.57),
+    'x_percent': (0.35, 0.49),
     'y_percent': (0.63, 0.76),
 }
 

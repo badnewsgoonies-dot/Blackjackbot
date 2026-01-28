@@ -36,7 +36,10 @@ except ImportError:
 
 # Try to import easyocr
 try:
-    import easyocr
+    import warnings
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*pin_memory.*")
+        import easyocr
     EASYOCR_AVAILABLE = True
     EASYOCR_READER = None  # Lazy init
 except ImportError:
@@ -299,12 +302,16 @@ class GOP3Detector:
             circularity = 0.0
             if perimeter > 0:
                 circularity = 4 * np.pi * area / (perimeter * perimeter)
+            
+            # Prefer more square-ish contours (aspect closer to 1.0)
+            aspect_score = 1.0 - abs(1.0 - aspect)
 
-            candidates.append((circularity, area, x, y, cw, ch))
+            candidates.append((circularity, aspect_score, area, x, y, cw, ch))
 
-        candidates.sort(key=lambda c: (c[0], c[1]), reverse=True)
+        # Sort by: 1) aspect_score (prefer square), 2) circularity, 3) higher position (lower y)
+        candidates.sort(key=lambda c: (c[1], c[0], -c[4]), reverse=True)
 
-        for idx, (circularity, area, x, y, cw, ch) in enumerate(candidates):
+        for idx, (circularity, aspect_score, area, x, y, cw, ch) in enumerate(candidates):
             # Extract the blue circle region, cropping inner area to exclude border
             pad = int(min(cw, ch) * 0.15)
             inner_x = x + pad
@@ -340,7 +347,9 @@ class GOP3Detector:
                 if ocr_engine == 'easyocr' and EASYOCR_AVAILABLE:
                     global EASYOCR_READER
                     if EASYOCR_READER is None:
-                        EASYOCR_READER = easyocr.Reader(['en'], gpu=False, verbose=False)
+                        with warnings.catch_warnings():
+                            warnings.filterwarnings("ignore", message=".*pin_memory.*")
+                            EASYOCR_READER = easyocr.Reader(['en'], gpu=False, verbose=False)
                     # Convert grayscale to BGR for EasyOCR
                     if len(processed.shape) == 2:
                         processed_bgr = cv2.cvtColor(processed, cv2.COLOR_GRAY2BGR)
@@ -380,14 +389,14 @@ class GOP3Detector:
                 soft_match = re.match(r'(\d+)/(\d+)', text)
                 if soft_match:
                     high_total = int(soft_match.group(2))
-                    if 12 <= high_total <= 21:
+                    if 2 <= high_total <= 21:
                         return (high_total, True)
 
                 # Hard hand: just a single number
                 numbers = re.findall(r'\d+', text)
                 if numbers:
                     total = int(numbers[0])
-                    if 4 <= total <= 21:
+                    if 2 <= total <= 21:
                         return (total, False)
             except Exception:
                 pass
@@ -412,7 +421,9 @@ class GOP3Detector:
             try:
                 global EASYOCR_READER
                 if EASYOCR_READER is None:
-                    EASYOCR_READER = easyocr.Reader(['en'], gpu=False, verbose=False)
+                    with warnings.catch_warnings():
+                        warnings.filterwarnings("ignore", message=".*pin_memory.*")
+                        EASYOCR_READER = easyocr.Reader(['en'], gpu=False, verbose=False)
                 if len(processed.shape) == 2:
                     processed_bgr = cv2.cvtColor(processed, cv2.COLOR_GRAY2BGR)
                 else:
@@ -623,12 +634,12 @@ class GOP3Detector:
             parts = clean.split('/')
             if len(parts) >= 2 and parts[1].isdigit():
                 total = int(parts[1])
-                if 4 <= total <= 21:
+                if 2 <= total <= 21:
                     return (total, True)
             return (None, False)
         if clean.isdigit():
             total = int(clean)
-            if 4 <= total <= 21:
+            if 2 <= total <= 21:
                 return (total, False)
         return (None, False)
 
