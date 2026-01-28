@@ -15,7 +15,15 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk
 import importlib.util
-import keyboard
+
+# keyboard library requires root on Linux - skip it
+if sys.platform == "win32":
+    try:
+        import keyboard
+    except ImportError:
+        keyboard = None  # type: ignore
+else:
+    keyboard = None  # type: ignore
 
 from config_loader import get_external_config_path, load_config
 from auto_calibration import AutoCalibrator
@@ -451,11 +459,15 @@ class App(tk.Tk):
             env = os.environ.copy()
             # Ensure calibration updates the same config file this GUI/bot will load.
             env["GOP3_CONFIG_PATH"] = str(CONFIG_PATH)
+            popen_kwargs = {
+                "cwd": str(script.parent),
+                "env": env,
+            }
+            if sys.platform == "win32":
+                popen_kwargs["creationflags"] = subprocess.CREATE_NEW_CONSOLE
             subprocess.Popen(
                 [python_exe, str(script.name)],
-                cwd=str(script.parent),
-                creationflags=subprocess.CREATE_NEW_CONSOLE,
-                env=env,
+                **popen_kwargs,
             )
             self.status.set("Launched calibration in new console window.")
         except Exception as exc:
