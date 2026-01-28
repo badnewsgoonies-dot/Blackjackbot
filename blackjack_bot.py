@@ -5,9 +5,16 @@ Plays optimal basic strategy by reading the screen and clicking buttons.
 
 import json
 import os
+import sys
 import time
 
-import keyboard
+# keyboard library requires root on Linux - make it optional
+try:
+    import keyboard
+    KEYBOARD_AVAILABLE = True
+except ImportError:
+    keyboard = None  # type: ignore
+    KEYBOARD_AVAILABLE = False
 
 from screen_capture import GOP3Detector, GameController
 from basic_strategy import HARD_STRATEGY, SOFT_STRATEGY, PAIR_STRATEGY, check_chart_integrity, get_chart_info
@@ -691,11 +698,12 @@ class BlackjackBot:
         global _stop_requested
         _stop_requested = False
 
-        print("[BOT] Started. Ctrl+Alt+J=stop, Ctrl+Alt+P=pause")
-
-        # Register hotkey
-        keyboard.add_hotkey('ctrl+alt+j', _request_stop)
-        keyboard.add_hotkey('ctrl+alt+p', _toggle_pause)
+        if KEYBOARD_AVAILABLE:
+            print("[BOT] Started. Ctrl+Alt+J=stop, Ctrl+Alt+P=pause")
+            keyboard.add_hotkey('ctrl+alt+j', _request_stop)
+            keyboard.add_hotkey('ctrl+alt+p', _toggle_pause)
+        else:
+            print("[BOT] Started. Press Ctrl+C to stop (hotkeys unavailable on Linux without root)")
 
         self.running = True
 
@@ -719,7 +727,8 @@ class BlackjackBot:
                 traceback.print_exc()
         finally:
             self.running = False
-            keyboard.unhook_all()  # Clean up hotkey
+            if KEYBOARD_AVAILABLE:
+                keyboard.unhook_all()  # Clean up hotkey
             if self.diag_session:
                 try:
                     zip_path = self.diag_session.finalize()
