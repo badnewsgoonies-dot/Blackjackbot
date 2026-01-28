@@ -103,6 +103,7 @@ class App(tk.Tk):
         super().__init__()
         self.title("GOP3 Bot Launcher")
         self.resizable(False, False)
+        self.attributes("-topmost", True)  # Always on top
 
         self.current_title = tk.StringVar(value="(not fetched)")
         self.config_title = tk.StringVar(value=read_config_value())
@@ -157,35 +158,21 @@ class App(tk.Tk):
         self._cancel_event = None
 
     def _build_ui(self):
-        pad = {"padx": 10, "pady": 6}
+        pad = {"padx": 10, "pady": 4}
 
-        row = ttk.Frame(self)
-        row.pack(fill="x", **pad)
-        ttk.Label(row, text="Foreground window:").pack(side="left")
-        ttk.Label(row, textvariable=self.current_title, width=50).pack(side="left", padx=6)
-        ttk.Button(row, text="Refresh", command=self._refresh_foreground).pack(side="left")
+        # GAME_WINDOW_TITLE row
+        row1 = ttk.Frame(self)
+        row1.pack(fill="x", **pad)
+        ttk.Label(row1, text="Game Window:").pack(side="left")
+        ttk.Entry(row1, textvariable=self.config_title, width=38).pack(side="left", padx=6)
+        ttk.Button(row1, text="Auto-detect", command=self._set_from_foreground).pack(side="left")
 
+        # Main buttons row
         row2 = ttk.Frame(self)
         row2.pack(fill="x", **pad)
-        ttk.Label(row2, text="GAME_WINDOW_TITLE:").pack(side="left")
-        ttk.Entry(row2, textvariable=self.config_title, width=42).pack(side="left", padx=6)
-        ttk.Button(row2, text="Set from foreground", command=self._set_from_foreground).pack(side="left")
-
-        row3 = ttk.Frame(self)
-        row3.pack(fill="x", **pad)
-        ttk.Checkbutton(row3, text="Disable focus check (set to None)", variable=self.disable_focus).pack(side="left")
-        ttk.Button(row3, text="Save to config", command=self._save_config).pack(side="left", padx=10)
-
-        row4 = ttk.Frame(self)
-        row4.pack(fill="x", **pad)
-        ttk.Button(row4, text="Run bot (test)", command=self._run_test).pack(side="left")
-        ttk.Button(row4, text="Run bot", command=self._run_bot).pack(side="left", padx=6)
-        ttk.Button(row4, text="Run calibration", command=self._run_calibration).pack(side="left", padx=6)
-        ttk.Button(row4, text="Open debugger", command=self._open_debugger).pack(side="left", padx=6)
-        ttk.Button(row4, text="Live reader", command=self._open_live_reader).pack(side="left", padx=6)
-        ttk.Button(row4, text="Diagnostic", command=self._open_diagnostic_reader).pack(side="left", padx=6)
-        ttk.Button(row4, text="Extract Frames", command=self._extract_frames).pack(side="left", padx=6)
-        self._record_btn = ttk.Button(row4, text="Record Frames", command=self._toggle_recording)
+        ttk.Button(row2, text="▶ Run Bot", command=self._run_bot, width=12).pack(side="left")
+        ttk.Button(row2, text="Tools ▼", command=self._show_tools_menu, width=8).pack(side="left", padx=6)
+        self._record_btn = ttk.Button(row2, text="⏺ Record", command=self._toggle_recording, width=10)
         self._record_btn.pack(side="left", padx=6)
         self._recording = False
         self._record_thread = None
@@ -193,15 +180,27 @@ class App(tk.Tk):
         self.status = tk.StringVar(value="")
         ttk.Label(self, textvariable=self.status, foreground="#444").pack(fill="x", **pad)
 
-        # Log panel
-        log_frame = ttk.LabelFrame(self, text="Bot Output")
+        # Log panel (smaller)
+        log_frame = ttk.LabelFrame(self, text="Log")
         log_frame.pack(fill="both", expand=True, **pad)
-        self.log_text = tk.Text(log_frame, height=10, state="disabled", wrap="word")
+        self.log_text = tk.Text(log_frame, height=6, state="disabled", wrap="word", font=("Consolas", 9))
         self.log_text.pack(side="left", fill="both", expand=True)
         scrollbar = ttk.Scrollbar(log_frame, command=self.log_text.yview)
         scrollbar.pack(side="right", fill="y")
         self.log_text.config(yscrollcommand=scrollbar.set)
-        ttk.Button(self, text="Clear Log", command=self._clear_log).pack(anchor="e", padx=10, pady=2)
+        ttk.Button(self, text="Clear", command=self._clear_log).pack(anchor="e", padx=10, pady=2)
+
+    def _show_tools_menu(self):
+        menu = tk.Menu(self, tearoff=0)
+        menu.add_command(label="Calibration", command=self._run_calibration)
+        menu.add_command(label="Debugger", command=self._open_debugger)
+        menu.add_command(label="Live Reader", command=self._open_live_reader)
+        menu.add_command(label="Diagnostic", command=self._open_diagnostic_reader)
+        # Position menu below the Tools button
+        try:
+            menu.tk_popup(self.winfo_pointerx(), self.winfo_pointery())
+        finally:
+            menu.grab_release()
 
     def _refresh_foreground(self):
         title = get_foreground_window_title()
@@ -215,7 +214,12 @@ class App(tk.Tk):
         title = get_foreground_window_title()
         if title:
             self.config_title.set(title)
-            self.status.set(f"Set to: {title}")
+            # Auto-save to config
+            ok = write_config_value(title, False)
+            if ok:
+                self.status.set(f"Saved: {title[:40]}...")
+            else:
+                self.status.set(f"Set (not saved): {title[:30]}...")
         else:
             self.status.set("No foreground title detected.")
 
@@ -397,9 +401,9 @@ class App(tk.Tk):
             self.overlay_path = hud_path
 
             if self._focus_game_window():
-                self.status.set("Launching bot...")
+                self.status.set("⏳ Starting bot (loading OCR)...")
             else:
-                self.status.set("Launching bot (game window not found)...")
+                self.status.set("⏳ Starting bot (game window not found)...")
 
             # Launch immediately - no F9 gate
             if getattr(sys, "frozen", False):
@@ -411,13 +415,21 @@ class App(tk.Tk):
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, bufsize=1
             )
-            # Stream output to log panel
+            self._bot_proc = proc
+            
+            # Stream output to log panel and update status on first output
             def stream_output():
+                first_line = True
                 try:
                     for line in proc.stdout:
                         self.after(0, lambda l=line: self._append_log(l))
+                        if first_line:
+                            self.after(0, lambda: self.status.set("✅ Bot running. Press Ctrl+Alt+J to stop."))
+                            first_line = False
                 except Exception:
                     pass
+                # Update status when bot exits
+                self.after(0, lambda: self.status.set("Bot stopped."))
             threading.Thread(target=stream_output, daemon=True).start()
 
             if self._can_show_overlay():
@@ -427,7 +439,6 @@ class App(tk.Tk):
                     except Exception:
                         pass
                 self.overlay = HUDOverlay(self, hud_path=hud_path, window_title=self.config_title.get())
-            self.status.set("Bot running. Press Ctrl+Alt+J to stop.")
         except Exception as exc:
             self.status.set(f"Failed to launch: {exc}")
 

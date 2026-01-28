@@ -691,13 +691,7 @@ class BlackjackBot:
         global _stop_requested
         _stop_requested = False
 
-        print("=" * 50)
-        print("BLACKJACK BOT - Governor of Poker 3")
-        print("=" * 50)
-        print("Playing basic strategy ('the book')")
-        print("Press Ctrl+Alt+J to stop the bot")
-        print("Move mouse to top-left corner for emergency stop")
-        print("=" * 50)
+        print("[BOT] Started. Ctrl+Alt+J=stop, Ctrl+Alt+P=pause")
 
         # Register hotkey
         keyboard.add_hotkey('ctrl+alt+j', _request_stop)
